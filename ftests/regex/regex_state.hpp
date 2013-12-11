@@ -38,53 +38,6 @@ namespace re {
     const unsigned EPSILONE         = 1 << 12;
     const unsigned FIRST            = 1 << 13;
     const unsigned LAST             = 1 << 14;
-    const unsigned SEQUENCE         = 1 << 15;
-
-
-    struct Range
-    {
-        char_int l;
-        char_int r;
-
-        bool contains(char_int c) const {
-            return this->l <= c && c <= this->r;
-        }
-    };
-
-    struct SequenceString
-    {
-        const char_int * s;
-        size_t len;
-
-        SequenceString(const char_int * str, size_t slen)
-        : s(str)
-        , len(slen)
-        {}
-    };
-
-    struct Sequence
-    {
-        const char_int * s;
-        size_t len;
-
-        unsigned contains(char_int c, utf8_consumer consumer) const {
-            if (c == this->s[0]) {
-                const char_int * s = this->s + 1;
-                while (*s && *s == consumer.bumpc()) {
-                    ++s;
-                }
-                return *s ? 0 : s - this->s;
-            }
-            return 0;
-        }
-
-        Sequence & operator=(const SequenceString& ss)
-        {
-            this->s = ss.s;
-            this->len = ss.len;
-            return *this;
-        }
-    };
 
     struct State
     {
@@ -92,51 +45,32 @@ namespace re {
                        State * out1 = 0, State * out2 = 0)
         : type(type)
         , num(0)
+        , l(range_left)
+        , r(range_right)
         , out1(out1)
         , out2(out2)
-        {
-            this->data.range.l = range_left;
-            this->data.range.r = range_right;
-        }
+        {}
 
-        ~State()
-        {
-            if (this->type == SEQUENCE) {
-                delete[] this->data.sequence.s;
-            }
-        }
-
-        unsigned check(char_int c, utf8_consumer consumer) const {
-            if (this->type == SEQUENCE) {
-                return this->data.sequence.contains(c, consumer);
-            }
-            return this->data.range.contains(c) ? 1 : 0;
+        bool check(char_int c) const {
+            return this->l <= c && c <= this->r;
         }
 
         void display(std::ostream& os) const {
             switch (this->type) {
                 case RANGE:
-                    if (this->data.range.l == 0 && this->data.range.r == char_int(-1u)) {
+                    if (this->l == 0 && this->r == char_int(-1u)) {
                         os << ".";
                     }
-                    else if (this->data.range.l == this->data.range.r) {
-                        os << "[" << this->data.range.l << "] '"
-                        << utf8_char(this->data.range.l) << "'";
+                    else if (this->l == this->r) {
+                        os << "[" << this->l << "] '"
+                        << utf8_char(this->l) << "'";
                     }
                     else {
-                        os << "[" << this->data.range.l << "-" << this->data.range.r << "] ['"
-                        << utf8_char(this->data.range.l) << "'-'" << utf8_char(this->data.range.r)
+                        os << "[" << this->l << "-" << this->r << "] ['"
+                        << utf8_char(this->l) << "'-'" << utf8_char(this->r)
                         << "']";
                     }
                     break;
-                case SEQUENCE: {
-                    os << '"';
-                    for (const char_int * p = this->data.sequence.s; *p; ++p) {
-                        os << utf8_char(*p);
-                    }
-                    os << '"';
-                    break;
-                }
                 case CAPTURE_CLOSE: os << ")"; break;
                 case CAPTURE_OPEN: os << "("; break;
                 case EPSILONE: os << "(epsilone)"; break;
@@ -176,10 +110,7 @@ namespace re {
         { return this->type == RANGE; }
 
         bool is_simple_char() const
-        { return this->is_range() && this->data.range.l == this->data.range.r; }
-
-        bool is_sequence() const
-        { return this->type == SEQUENCE; }
+        { return this->is_range() && this->l == this->r; }
 
         bool is_uninitialized() const
         { return this->type == 0; }
@@ -187,10 +118,8 @@ namespace re {
         unsigned type;
         unsigned num;
 
-        union {
-            Range range;
-            Sequence sequence;
-        } data;
+        char_int l;
+        char_int r;
 
         State *out1;
         State *out2;
@@ -244,48 +173,6 @@ namespace re {
 
     inline State * new_last() {
         return new State(LAST, 0, 0);
-    }
-
-    inline State * new_sequence(const char_int * s, size_t len, State * out1 = 0) {
-        State * ret = new State(SEQUENCE, 0, 0, out1);
-        ret->data.sequence.s = s;
-        ret->data.sequence.len = len;
-        return ret;
-    }
-
-    inline State * new_sequence(const SequenceString & ss, State * out1 = 0) {
-        return new_sequence(ss.s, ss.len, out1);
-    }
-
-    inline SequenceString new_string_sequence(char_int c, std::size_t count) {
-        char_int * s = new char_int[count + 1];
-        std::fill(s, s + count, c);
-        *(s+count) = 0;
-        return SequenceString(s, count);
-    }
-
-    inline SequenceString new_string_sequence(const char_int * str, std::size_t len,
-                                              std::size_t count) {
-        char_int * ret = new char_int[count * len + 1];
-        char_int * p = ret;
-        while (count--) {
-            std::copy(str, str + len, p);
-            p += len;
-        }
-        *p = 0;
-        return SequenceString(ret, count * len);
-    }
-
-    inline SequenceString new_string_sequence(const char_int * str, std::size_t count) {
-        return new_string_sequence(str, std::char_traits<char_int>::length(str), count);
-    }
-
-    inline SequenceString new_string_sequence(const Sequence & seq, std::size_t count) {
-        return new_string_sequence(seq.s, seq.len, count);
-    }
-
-    inline State * new_sequence(char_int c, std::size_t count, State * out1 = 0) {
-        return new_sequence(new_string_sequence(c, count), out1);
     }
 
 }

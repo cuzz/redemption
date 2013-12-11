@@ -177,17 +177,6 @@ namespace re {
             return this->push(LAST);
         }
 
-        State * sequence(const char_int * s, size_t len, State * out1 = 0) {
-            State * ret = this->push(SEQUENCE, 0, 0, out1);
-            ret->data.sequence.s = s;
-            ret->data.sequence.len = len;
-            return ret;
-        }
-
-        State * sequence(const SequenceString & ss, State * out1 = 0) {
-            return this->sequence(ss.s, ss.len, out1);
-        }
-
         void clear()
         {
             this->delete_state();
@@ -396,222 +385,172 @@ namespace re {
         return c == '*' || c == '+' || c == '?' || c == '|' || c == '(' || c == ')' || c == '^' || c == '$' || (c == '{' && is_range_repetition(consumer.str()));
     }
 
-    inline State ** st_compilechar(StateAccu & accu, State ** pst,
-                                   utf8_consumer & consumer, char_int c, const char * & msg_err)
+    inline State ** st_compile_range(StateAccu & accu, State ** pst,
+                                     utf8_consumer & consumer, char_int c, const char * & msg_err)
     {
-        if (consumer.valid())
-        {
-            unsigned n = 0;
-            char_int c2 = c;
-            utf8_consumer cons = consumer;
-            while (get_c(cons, c2)) {
-                ++n;
-                if (!(c2 = cons.bumpc())) {
-                    break;
-                }
-                if (is_meta_char(cons, c2)) {
-                    if (c2 == '*' || c2 == '+' || c2 == '?') {
-                        --n;
-                    }
-                    break;
-                }
+        bool reverse_result = false;
+        VectorRange ranges(accu.c_ranges);
+        if (consumer.valid() && (c = consumer.bumpc()) != ']') {
+            if (c == '^') {
+                reverse_result = true;
+                c = consumer.bumpc();
             }
-            if (n > 1) {
-                char_int * str = new char_int[n+1];
-                char_int * p = str;
-                *p = get_c(consumer, c);
-                for (unsigned i = 1; i != n; ++i) {
-                    *++p = get_c(consumer, consumer.bumpc());
-                }
-                *++p = 0;
-                return &(*pst = accu.sequence(str, n))->out1;
+            if (c == '-') {
+                ranges.push('-');
+                c = consumer.bumpc();
             }
-        }
-
-        if (c == '\\' && consumer.valid()) {
-            c = consumer.bumpc();
-            switch (c) {
-                case 'd': return &(*pst = accu.range('0','9'))->out1;
-                case 'D': return ident_D(accu, pst, accu.epsilone());
-                case 'w': return ident_w(accu, pst, accu.epsilone());
-                case 'W': return ident_W(accu, pst, accu.epsilone());
-                case 's': return ident_s(accu, pst, accu.epsilone());
-                case 'S': return ident_S(accu, pst, accu.epsilone());
-                case 'n': return &(*pst = accu.character('\n'))->out1;
-                case 't': return &(*pst = accu.character('\t'))->out1;
-                case 'r': return &(*pst = accu.character('\r'))->out1;
-                case 'v': return &(*pst = accu.character('\v'))->out1;
-                default : return &(*pst = accu.character(c))->out1;
-            }
-        }
-
-        if (c == '[') {
-            bool reverse_result = false;
-            VectorRange ranges(accu.c_ranges);
-            if (consumer.valid() && (c = consumer.bumpc()) != ']') {
-                if (c == '^') {
-                    reverse_result = true;
-                    c = consumer.bumpc();
-                }
-                if (c == '-') {
-                    ranges.push('-');
-                    c = consumer.bumpc();
-                }
-                const unsigned char * cs = consumer.s;
-                while (consumer.valid() && c != ']') {
-                    const unsigned char * p = consumer.s;
-                    char_int prev_c = c;
-                    while (c != ']' && c != '-') {
-                        if (c == '\\') {
-                            char_int cc = consumer.bumpc();
-                            switch (cc) {
-                                case 'd':
-                                    ranges.push('0',    '9');
-                                    break;
-                                case 'D':
-                                    ranges.push(0,      '0'-1);
-                                    ranges.push('9'+1,  -1u);
-                                    break;
-                                case 'w':
-                                    ranges.push('a',    'z');
-                                    ranges.push('A',    'Z');
-                                    ranges.push('0',    '9');
-                                    ranges.push('_');
-                                    break;
-                                case 'W':
-                                    ranges.push(0,      '0'-1);
-                                    ranges.push('9'+1,  'A'-1);
-                                    ranges.push('Z'+1,  '_'-1);
-                                    ranges.push('_'+1,  'a'-1);
-                                    ranges.push('z'+1,  -1u);
-                                    break;
-                                case 's':
-                                    ranges.push(' ');
-                                    ranges.push('\t',   '\v');
-                                    break;
-                                case 'S':
-                                    ranges.push(0,      '\t'-1);
-                                    ranges.push('\v'+1, ' '-1);
-                                    ranges.push(' '+1,  -1u);
-                                    break;
-                                case 'n': ranges.push('\n'); break;
-                                case 't': ranges.push('\t'); break;
-                                case 'r': ranges.push('\r'); break;
-                                case 'v': ranges.push('\v'); break;
-                                default : ranges.push(cc); break;
-                            }
-                        }
-                        else {
-                            ranges.push(c);
-                        }
-
-                        if ( ! consumer.valid()) {
-                            break;
-                        }
-
-                        prev_c = c;
-                        c = consumer.bumpc();
-                    }
-
-                    if (c == '-') {
-                        if (cs == consumer.s) {
-                            ranges.push('-');
-                        }
-                        else if (!consumer.valid()) {
-                            msg_err = "missing terminating ]";
-                            return 0;
-                        }
-                        else if (consumer.getc() == ']') {
-                            ranges.push('-');
-                            consumer.bumpc();
-                        }
-                        else if (consumer.s == p) {
-                            ranges.push('-');
-                        }
-                        else {
-                            c = consumer.bumpc();
-                            if ((msg_err = check_interval(prev_c, c))) {
-                                return 0;
-                            }
-                            if (ranges.ranges.size()) {
-                                ranges.ranges.pop_back();
-                            }
-                            ranges.push(prev_c, c);
-                            cs = consumer.s;
-                            if (consumer.valid()) {
-                                c = consumer.bumpc();
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (ranges.ranges.empty() || c != ']') {
-                msg_err = "missing terminating ]";
-                return pst;
-            }
-
-            if (ranges.ranges.size() == 1) {
-                if (reverse_result) {
-                    State * eps = accu.epsilone();
-                    *pst = accu.split(accu.range(0, ranges.ranges[0].first-1, eps),
-                                      accu.range(ranges.ranges[0].second+1, -1u, eps));
-                    return &eps->out1;
-                }
-                else {
-                    *pst = accu.range(ranges.ranges[0].first, ranges.ranges[0].second);
-                    return &(*pst)->out1;
-                }
-            }
-
-            std::sort(ranges.ranges.begin(), ranges.ranges.end());
-
-            VectorRange::iterator first = ranges.ranges.begin();
-            VectorRange::iterator last = ranges.ranges.end();
-            VectorRange::iterator result = first;
-
-            if (first != last) {
-                while (++first != last && !(result->second + 1 >= first->first)) {
-                    ++result;
-                }
-                for (; first != last; ++first) {
-                    if (result->second + 1 >= first->first) {
-                        if (result->second < first->second) {
-                            result->second = first->second;
+            const unsigned char * cs = consumer.s;
+            while (consumer.valid() && c != ']') {
+                const unsigned char * p = consumer.s;
+                char_int prev_c = c;
+                while (c != ']' && c != '-') {
+                    if (c == '\\') {
+                        char_int cc = consumer.bumpc();
+                        switch (cc) {
+                            case 'd':
+                                ranges.push('0',    '9');
+                                break;
+                            case 'D':
+                                ranges.push(0,      '0'-1);
+                                ranges.push('9'+1,  -1u);
+                                break;
+                            case 'w':
+                                ranges.push('a',    'z');
+                                ranges.push('A',    'Z');
+                                ranges.push('0',    '9');
+                                ranges.push('_');
+                                break;
+                            case 'W':
+                                ranges.push(0,      '0'-1);
+                                ranges.push('9'+1,  'A'-1);
+                                ranges.push('Z'+1,  '_'-1);
+                                ranges.push('_'+1,  'a'-1);
+                                ranges.push('z'+1,  -1u);
+                                break;
+                            case 's':
+                                ranges.push(' ');
+                                ranges.push('\t',   '\v');
+                                break;
+                            case 'S':
+                                ranges.push(0,      '\t'-1);
+                                ranges.push('\v'+1, ' '-1);
+                                ranges.push(' '+1,  -1u);
+                                break;
+                            case 'n': ranges.push('\n'); break;
+                            case 't': ranges.push('\t'); break;
+                            case 'r': ranges.push('\r'); break;
+                            case 'v': ranges.push('\v'); break;
+                            default : ranges.push(cc); break;
                         }
                     }
                     else {
-                        ++result;
-                        *result = *first;
+                        ranges.push(c);
+                    }
+
+                    if ( ! consumer.valid()) {
+                        break;
+                    }
+
+                    prev_c = c;
+                    c = consumer.bumpc();
+                }
+
+                if (c == '-') {
+                    if (cs == consumer.s) {
+                        ranges.push('-');
+                    }
+                    else if (!consumer.valid()) {
+                        msg_err = "missing terminating ]";
+                        return 0;
+                    }
+                    else if (consumer.getc() == ']') {
+                        ranges.push('-');
+                        consumer.bumpc();
+                    }
+                    else if (consumer.s == p) {
+                        ranges.push('-');
+                    }
+                    else {
+                        c = consumer.bumpc();
+                        if ((msg_err = check_interval(prev_c, c))) {
+                            return 0;
+                        }
+                        if (ranges.ranges.size()) {
+                            ranges.ranges.pop_back();
+                        }
+                        ranges.push(prev_c, c);
+                        cs = consumer.s;
+                        if (consumer.valid()) {
+                            c = consumer.bumpc();
+                        }
                     }
                 }
-                ++result;
-                ranges.ranges.resize(ranges.ranges.size() - (last - result));
             }
-
-            State * eps = accu.epsilone();
-            first = ranges.ranges.begin();
-            if (reverse_result) {
-                State * st = accu.range(0, first->first-1, eps);
-                char_int cr = first->second;
-                while (++first != result) {
-                    st = accu.split(st, accu.range(cr+1, first->first-1, eps));
-                    cr = first->second;
-                }
-                st = accu.split(st, accu.range(cr+1, -1u, eps));
-                *pst = st;
-            }
-            else {
-                State * st = accu.range(first->first, first->second, eps);
-                while (++first != result) {
-                    st = accu.split(st, accu.range(first->first, first->second, eps));
-                }
-                *pst = st;
-            }
-            return &eps->out1;
         }
 
-        return &(*pst = (c == '.') ? accu.any() : accu.character(c))->out1;
+        if (ranges.ranges.empty() || c != ']') {
+            msg_err = "missing terminating ]";
+            return 0;
+        }
+
+        if (ranges.ranges.size() == 1) {
+            if (reverse_result) {
+                State * eps = accu.epsilone();
+                *pst = accu.split(accu.range(0, ranges.ranges[0].first-1, eps),
+                                    accu.range(ranges.ranges[0].second+1, -1u, eps));
+                return &eps->out1;
+            }
+            else {
+                *pst = accu.range(ranges.ranges[0].first, ranges.ranges[0].second);
+                return &(*pst)->out1;
+            }
+        }
+
+        std::sort(ranges.ranges.begin(), ranges.ranges.end());
+
+        VectorRange::iterator first = ranges.ranges.begin();
+        VectorRange::iterator last = ranges.ranges.end();
+        VectorRange::iterator result = first;
+
+        if (first != last) {
+            while (++first != last && !(result->second + 1 >= first->first)) {
+                ++result;
+            }
+            for (; first != last; ++first) {
+                if (result->second + 1 >= first->first) {
+                    if (result->second < first->second) {
+                        result->second = first->second;
+                    }
+                }
+                else {
+                    ++result;
+                    *result = *first;
+                }
+            }
+            ++result;
+            ranges.ranges.resize(ranges.ranges.size() - (last - result));
+        }
+
+        State * eps = accu.epsilone();
+        first = ranges.ranges.begin();
+        if (reverse_result) {
+            State * st = accu.range(0, first->first-1, eps);
+            char_int cr = first->second;
+            while (++first != result) {
+                st = accu.split(st, accu.range(cr+1, first->first-1, eps));
+                cr = first->second;
+            }
+            st = accu.split(st, accu.range(cr+1, -1u, eps));
+            *pst = st;
+        }
+        else {
+            State * st = accu.range(first->first, first->second, eps);
+            while (++first != result) {
+                st = accu.split(st, accu.range(first->first, first->second, eps));
+            }
+            *pst = st;
+        }
+        return &eps->out1;
     }
 
 
@@ -685,10 +624,7 @@ namespace re {
 
     private:
         State * copy(State * st) {
-            if (st->type == SEQUENCE) {
-                return this->accu.sequence(new_string_sequence(st->data.sequence, 1));
-            }
-            State * ret = this->accu.normal(st->type, st->data.range.l, st->data.range.r);
+            State * ret = this->accu.normal(st->type, st->l, st->r);
             if (st->is_cap()) {
                 if (!this->nb_clone) {
                     ret->num = st->num;
@@ -704,26 +640,6 @@ namespace re {
     };
 
     typedef std::pair<State*, State**> IntermendaryState;
-
-    inline bool is_unique_string_state(State * first, State * last)
-    {
-        return (first->out1 == last && first->is_simple_char())
-            || (first->is_sequence()
-                && (!first->out1 || (first->out1->is_epsilone() && first->out1->out1 == last)));
-    }
-
-    inline void transform_to_sequence(State * st, size_t m)
-    {
-        if (st->is_simple_char()) {
-            st->data.sequence = new_string_sequence(st->data.range.l, m);
-        }
-        else {
-            const char_int * seq = st->data.sequence.s;
-            st->data.sequence = new_string_sequence(st->data.sequence, m);
-            delete [] seq;
-        }
-        st->type = SEQUENCE;
-    }
 
     inline IntermendaryState intermendary_st_compile(StateAccu & accu,
                                                      utf8_consumer & consumer,
@@ -752,8 +668,34 @@ namespace re {
             if (!is_meta_char(consumer, c)) {
                 do {
                     spst = pst;
-                    if (!(pst = st_compilechar(accu, pst, consumer, c, msg_err))) {
-                        return IntermendaryState(0,0);
+                    if (c == '.') {
+                        pst = &(*pst = accu.any())->out1;
+                    }
+                    else if (c == '[') {
+                        if (!(pst = st_compile_range(accu, pst, consumer, c, msg_err))) {
+                            return IntermendaryState(0,0);
+                        }
+                    }
+                    else if (c == '\\') {
+                        char_int c2 = consumer.bumpc();
+                        switch (c2) {
+                            case 0: pst = &(*pst = accu.character(c))->out1; break;
+                            case 'd': pst = &(*pst = accu.range('0','9'))->out1; break;
+                            case 'D': pst = ident_D(accu, pst, accu.epsilone()); break;
+                            case 'w': pst = ident_w(accu, pst, accu.epsilone()); break;
+                            case 'W': pst = ident_W(accu, pst, accu.epsilone()); break;
+                            case 's': pst = ident_s(accu, pst, accu.epsilone()); break;
+                            case 'S': pst = ident_S(accu, pst, accu.epsilone()); break;
+                            case 'n': pst = &(*pst = accu.character('\n'))->out1; break;
+                            case 't': pst = &(*pst = accu.character('\t'))->out1; break;
+                            case 'r': pst = &(*pst = accu.character('\r'))->out1; break;
+                            case 'v': pst = &(*pst = accu.character('\v'))->out1; break;
+                            default : pst = &(*pst = accu.character(c2))->out1; break;
+                        }
+                        c = c2;
+                    }
+                    else {
+                        pst = &(*pst = accu.character(c))->out1;
                     }
                     if (is_meta_char(consumer, c = consumer.bumpc())) {
                         break;
@@ -817,23 +759,16 @@ namespace re {
                                 }
                                 else if (m) {
                                     State * e = accu.finish();
-                                    if (m > 2 && is_unique_string_state(*spst, *pst)) {
-                                        transform_to_sequence(*spst, m);
-                                        (*spst)->out1 = e;
-                                        *spst = accu.split(e, *spst);
+                                    *pst = e;
+                                    ContextClone cloner(accu, *spst, m-1);
+                                    std::size_t idx = cloner.get_idx(e);
+                                    State ** lst = &e->out1;
+                                    while (--m) {
+                                        *pst = cloner.clone();
+                                        lst = pst;
+                                        pst = &cloner.sts2[idx]->out1;
                                     }
-                                    else {
-                                        *pst = e;
-                                        ContextClone cloner(accu, *spst, m-1);
-                                        std::size_t idx = cloner.get_idx(e);
-                                        State ** lst = &e->out1;
-                                        while (--m) {
-                                            *pst = cloner.clone();
-                                            lst = pst;
-                                            pst = &cloner.sts2[idx]->out1;
-                                        }
-                                        *pst = accu.split(e, *lst);
-                                    }
+                                    *pst = accu.split(e, *lst);
                                     pst = &e->out1;
                                 }
                                 else {
@@ -888,46 +823,26 @@ namespace re {
                                 else {
                                     --end;
                                     State * finish = accu.finish();
-                                    if (m > 1 && is_unique_string_state(*spst, *pst)) {
-                                        State * lst = finish;
-                                        if ((*spst)->is_simple_char()) {
-                                            char_int cst = (*spst)->data.range.l;
-                                            while (n--) {
-                                                lst = accu.split(finish, accu.character(cst, lst));
-                                            }
-                                        }
-                                        else {
-                                            while (n--) {
-                                                lst = accu.split(finish, accu.sequence(
-                                                    new_string_sequence((*spst)->data.sequence, 1), lst
-                                                ));
-                                            }
-                                        }
-                                        transform_to_sequence(*spst, m);
-                                        (*spst)->out1 = lst;
+                                    State * e = accu.epsilone();
+                                    *pst = e;
+                                    ContextClone cloner(accu, *spst, m-1+n);
+                                    std::size_t idx = cloner.get_idx(e);
+                                    pst = &e->out1;
+                                    State * lst = e;
+                                    while (--m) {
+                                        *pst = cloner.clone();
+                                        lst = cloner.sts2[idx];
+                                        pst = &lst->out1;
                                     }
-                                    else {
-                                        State * e = accu.epsilone();
-                                        *pst = e;
-                                        ContextClone cloner(accu, *spst, m-1+n);
-                                        std::size_t idx = cloner.get_idx(e);
-                                        pst = &e->out1;
-                                        State * lst = e;
-                                        while (--m) {
-                                            *pst = cloner.clone();
-                                            lst = cloner.sts2[idx];
-                                            pst = &lst->out1;
-                                        }
 
-                                        while (n--) {
-                                            lst->type = SPLIT;
-                                            lst->out1 = finish;
-                                            lst->out2 = cloner.clone();
-                                            lst = cloner.sts2[idx];
-                                        }
+                                    while (n--) {
+                                        lst->type = SPLIT;
                                         lst->out1 = finish;
-                                        lst->type = EPSILONE;
+                                        lst->out2 = cloner.clone();
+                                        lst = cloner.sts2[idx];
                                     }
+                                    lst->out1 = finish;
+                                    lst->type = EPSILONE;
                                     pst = &finish->out1;
                                 }
                             }
@@ -940,20 +855,15 @@ namespace re {
                         //{m}
                         else {
                             if (1 != m) {
-                                if (is_unique_string_state(*spst, *pst)) {
-                                    transform_to_sequence(*spst, m);
-                                }
-                                else {
-                                    /**///std::cout << ("fixe ") << m << std::endl;
-                                    State * e = accu.epsilone();
-                                    *pst = e;
-                                    ContextClone cloner(accu, *spst, m-1);
-                                    std::size_t idx = cloner.get_idx(e);
-                                    while (--m) {
-                                        /**///std::cout << ("clone") << std::endl;
-                                        *pst = cloner.clone();
-                                        pst = &cloner.sts2[idx]->out1;
-                                    }
+                                /**///std::cout << ("fixe ") << m << std::endl;
+                                State * e = accu.epsilone();
+                                *pst = e;
+                                ContextClone cloner(accu, *spst, m-1);
+                                std::size_t idx = cloner.get_idx(e);
+                                while (--m) {
+                                    /**///std::cout << ("clone") << std::endl;
+                                    *pst = cloner.clone();
+                                    pst = &cloner.sts2[idx]->out1;
                                 }
                             }
                             end -= 1;

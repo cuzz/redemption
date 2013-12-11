@@ -46,10 +46,8 @@ namespace re {
             unsigned type;
             unsigned num;
 
-            union {
-                Range range;
-                Sequence sequence;
-            } data;
+            char_int l;
+            char_int r;
         };
 
         StateMachine2(const StateMachine2&) /*= delete*/;
@@ -59,7 +57,7 @@ namespace re {
                                             size_t nb_idx_trace_free,
                                             size_t nb_reindex_trace,
                                             size_t nb_traces,
-                                            size_t byte_mini_sts, size_t byte_mini_sts_seq)
+                                            size_t byte_mini_sts)
         {
             nb_st_list *= sizeof(StateList);
             nb_st_list += nb_st_list % sizeof(intmax_t);
@@ -86,7 +84,7 @@ namespace re {
             char * mem = static_cast<char*>(::operator new(
                 nb_st_list + nb_st_range_list + nb_step_range_list * 2
                 + nb_traces + nb_idx_trace_free + nb_reindex_trace + nb_nums
-                + nb_cap_type + byte_mini_sts + byte_mini_sts_seq
+                + nb_cap_type + byte_mini_sts
             ));
 
             this->st_list = reinterpret_cast<StateList*>(mem);
@@ -116,7 +114,7 @@ namespace re {
         }
 
         void initialize_memory_without_capture(size_t nb_st_list, size_t nb_st_range_list,
-                                               size_t byte_mini_sts, size_t byte_mini_sts_seq)
+                                               size_t byte_mini_sts)
         {
             nb_st_list *= sizeof(StateList);
             nb_st_list += nb_st_list % sizeof(intmax_t);
@@ -134,7 +132,7 @@ namespace re {
 
             char * mem = static_cast<char*>(::operator new(
                 nb_st_list + nb_st_range_list + nb_step_range_list * 2
-                + nb_nums + byte_mini_sts + byte_mini_sts_seq
+                + nb_nums + byte_mini_sts
             ));
 
             this->st_list = reinterpret_cast<StateList*>(mem);
@@ -176,13 +174,11 @@ namespace re {
             this->nums = reinterpret_cast<unsigned*>(mem);
         }
 
-        void initialize_memory(size_t nb_st_list, size_t nb_st_range_list,
-                               bool cpy_sts, unsigned nb_char_seq)
+        void initialize_memory(size_t nb_st_list, size_t nb_st_range_list, bool cpy_sts)
         {
             const size_t size_mini_sts = cpy_sts
             ? (this->nb_states - this->nb_capture) * sizeof(MinimalState)
             : 0;
-            const size_t size_mini_sts_seq = cpy_sts ? nb_char_seq * sizeof(char_int) : 0;
             if (this->nb_capture) {
                 this->initialize_memory_with_capture(
                     nb_st_list, //st_list
@@ -190,16 +186,14 @@ namespace re {
                     this->nodes, //idx_trace_free
                     this->nb_capture, //reindex_trace
                     this->nodes * this->nb_capture, //traces
-                    size_mini_sts,
-                    size_mini_sts_seq
+                    size_mini_sts
                 );
             }
             else {
                 this->initialize_memory_without_capture(
                     nb_st_list, //st_list
                     nb_st_range_list, //st_range_list
-                    size_mini_sts,
-                    size_mini_sts_seq
+                    size_mini_sts
                 );
             }
         }
@@ -227,17 +221,12 @@ namespace re {
                 return ;
             }
 
-            unsigned nb_char_seq = 0;
             unsigned nb_state_consume = 0;
             {
                 state_list_t::const_iterator first = sts.begin();
                 state_list_t::const_iterator last = sts.end() - this->nb_capture;
                 for (; first != last; ++first) {
-                    if ((*first)->is_sequence()) {
-                        this->nodes += (*first)->data.sequence.len - 1;
-                        nb_char_seq += (*first)->data.sequence.len + 1;
-                    }
-                    if ((*first)->type & (RANGE|SEQUENCE)) {
+                    if ((*first)->is_range()) {
                         ++nb_state_consume;
                     }
                 }
@@ -254,7 +243,7 @@ namespace re {
                 this->initialize_minimal_memory(matrix_size + nb_st, nb_st);
             }
             else {
-                this->initialize_memory(matrix_size + nb_st, nb_st, copy_states, nb_char_seq);
+                this->initialize_memory(matrix_size + nb_st, nb_st, copy_states);
             }
 
             std::memset(this->st_list, 0, (matrix_size + nb_st) * sizeof * this->st_list);
@@ -313,14 +302,14 @@ namespace re {
                     }
                     StateList * result = first;
                     for (; first != l->last; ++first) {
-                      if (first->st) {
-                        *result = *first;
-                        ++result;
-                      }
+                        if (first->st) {
+                            *result = *first;
+                            ++result;
+                        }
                     }
                     l->last = result;
                     if (l->first == l->last) {
-                      l->st_num = -1u;
+                        l->st_num = -1u;
                     }
                 }
             }
@@ -401,8 +390,7 @@ namespace re {
                 RangeList * tmp_range_list = this->st_range_list;
                 StateList * tmp_st_first_list = this->st_range_beginning.first;
 
-                this->initialize_memory(nb_st + nb_beginning_st,
-                                        nb_range, copy_states, nb_char_seq);
+                this->initialize_memory(nb_st + nb_beginning_st, nb_range, copy_states);
                 std::memset(this->st_list, 0, (nb_st + nb_beginning_st) * sizeof * this->st_list);
                 this->st_range_list_last = this->st_range_list + (this->st_range_list_last - tmp_range_list);
 
@@ -479,13 +467,15 @@ namespace re {
                 ? this->st_range_list->st_num : 0;
             }
 
-            StateList * first = this->st_range_beginning.first;
-            StateList * last = this->st_range_beginning.last;
-            for (; first != last; ++first) {
-                if (first->st && ((first->st->out1 && first->st->out1->is_finish()) || first->st->is_terminate())) {
-                    this->st_range_list = this->st_range_list_last;
-                    this->st_range_beginning.st_num = -1u;
-                    break;
+            {
+                StateList * first = this->st_range_beginning.first;
+                StateList * last = this->st_range_beginning.last;
+                for (; first != last; ++first) {
+                    if (first->st && ((first->st->out1 && first->st->out1->is_finish()) || first->st->is_terminate())) {
+                        this->st_range_list = this->st_range_list_last;
+                        this->st_range_beginning.st_num = -1u;
+                        break;
+                    }
                 }
             }
 
@@ -497,11 +487,6 @@ namespace re {
             }
             else if (copy_states) {
                 {
-                    const size_t size_mini_sts = (this->nb_states - this->nb_capture) * sizeof(MinimalState);
-                    char_int * str = reinterpret_cast<char_int*>(
-                        reinterpret_cast<char*>(this->mini_sts) + size_mini_sts
-                        + size_mini_sts % sizeof(intmax_t)
-                    );
                     state_list_t::const_iterator first = sts.begin();
                     state_list_t::const_iterator last = sts.end() - this->nb_capture;
                     MinimalState * first2 = this->mini_sts;
@@ -512,16 +497,8 @@ namespace re {
                         State & st = **first;
                         first2->type = st.type;
                         first2->num = st.num;
-                        if (st.is_sequence()) {
-                            std::copy(st.data.sequence.s, st.data.sequence.s + st.data.sequence.len + 1, str);
-                            first2->data.sequence.s = str;
-                            str += st.data.sequence.len + 1;
-                            first2->data.sequence.len = st.data.sequence.len;
-                        }
-                        else {
-                            first2->data.range.l = st.data.range.l;
-                            first2->data.range.r = st.data.range.r;
-                        }
+                        first2->l = st.l;
+                        first2->r = st.r;
                         ++first2;
                     }
                     this->mini_sts_last = first2;
@@ -559,6 +536,27 @@ namespace re {
                 }
                 this->st_range_beginning.last = this->st_range_beginning.first;
                 this->st_range_list_last = this->st_range_list;
+            }
+
+            {
+                StateList * first = this->st_range_beginning.first;
+                StateList * last = this->st_range_beginning.last;
+                for (; first != last; ++first) {
+                    first->l = first->st->l;
+                    first->r = first->st->r;
+                }
+            }
+            {
+                RangeList * first = this->st_range_list;
+                RangeList * last = this->st_range_list_last;
+                for (; first != last; ++first) {
+                    StateList * l = first->first;
+                    StateList * rlast = first->last;
+                    for (; l != rlast; ++l) {
+                        l->l = l->st->l;
+                        l->r = l->st->r;
+                    }
+                }
             }
         }
 
@@ -964,17 +962,14 @@ namespace re {
                     std::cout << "\t" << first->st->num << "\t"
                     << *first->st
                     << ((first->st->is_range()
-                      && first->st->data.range.l == 0
-                      && first->st->data.range.r == char_int(-1)
-                    ) ||(first->st->is_sequence()
-                      && first->st->data.sequence.len < 8
-                    ) ? "\t\t\t"
-                      :  (first->st->is_range()
-                       && first->st->data.range.l != first->st->data.range.r
-                      )||(first->st->is_sequence()
-                       && first->st->data.sequence.len > 7
-                      ) ? "\t"
-                        : "\t\t"
+                      && first->st->l == 0
+                      && first->st->r == char_int(-1)
+                    )
+                    ? "\t\t\t"
+                    : (first->st->is_range()
+                    && first->st->l != first->st->r
+                    ) ? "\t"
+                    : "\t\t"
                     ) << first->next << (first->next ? "\t" : "\t\t")
                     << first->next_is_finish << "\t" << first->is_terminate;
                     if (first->num_open != -1u) {
@@ -1044,47 +1039,43 @@ namespace re {
         struct StepRangeList {
             struct StepRange {
                 const RangeList * rl;
-                unsigned consume;
                 unsigned idx;
                 unsigned num_close;
 
-                StepRange(const RangeList * l, unsigned count_consume, unsigned id, unsigned numclose)
+                StepRange(const RangeList * l, unsigned id, unsigned numclose)
                 : rl(l)
-                , consume(count_consume)
                 , idx(id)
                 , num_close(numclose)
                 {}
 
-                StepRange(const RangeList * l, unsigned count_consume, unsigned id)
+                StepRange(const RangeList * l, unsigned id)
                 : rl(l)
-                , consume(count_consume)
                 , idx(id)
                 {}
 
-                StepRange(const RangeList * l, unsigned count_consume)
+                StepRange(const RangeList * l)
                 : rl(l)
-                , consume(count_consume)
                 {}
             };
 
             typedef StepRange * iterator;
 
-            void push_back(RangeList* val, unsigned count_consume)
+            void push_back(RangeList* val)
             {
                 assert((this->last - this->list) != this->nodes);
-                new(this->last++) StepRange(val, count_consume);
+                new(this->last++) StepRange(val);
             }
 
-            void push_back(RangeList* val, unsigned count_consume, unsigned id)
+            void push_back(RangeList* val, unsigned id)
             {
                 assert((this->last - this->list) != this->nodes);
-                new(this->last++) StepRange(val, count_consume, id);
+                new(this->last++) StepRange(val, id);
             }
 
-            void push_back(RangeList* val, unsigned count_consume, unsigned id, unsigned numclose)
+            void push_back(RangeList* val, unsigned id, unsigned numclose)
             {
                 assert((this->last - this->list) != this->nodes);
-                new(this->last++) StepRange(val, count_consume, id, numclose);
+                new(this->last++) StepRange(val, id, numclose);
             }
 
             void push_back(const StepRange & x)
@@ -1128,58 +1119,10 @@ namespace re {
                       ExactMatch<exact_match>, ActiveCapture<active_capture>)
         {
             unsigned new_trace;
-            unsigned count_consume;
             for (StepRangeIterator ifirst = l1.begin(), ilast = l1.end(); ifirst != ilast; ++ifirst) {
                 ++this->step_count;
                 if (active_capture) {
                     new_trace = 0;
-                }
-
-                if (ifirst->consume) {
-                    if (!--ifirst->consume) {
-                        const StateList * stl = reinterpret_cast<const StateList*>(ifirst->rl);
-                        if (!stl->next && consumer.valid() && stl->is_terminate) {
-#ifdef DISPLAY_TRACE
-                            std::cout << "\t\033[35mx " << (ifirst->rl->st_num) << "\033[0m\n";
-#endif
-                            continue;
-                        }
-
-                        if (active_capture) {
-                            if (ifirst->num_close != -1u) {
-                                unsigned num = ifirst->num_close;
-                                if (tracer.close(ifirst->idx, s, num)) {
-#ifdef DISPLAY_TRACE
-                                    std::cout << "\t" << ifirst->idx << " (close) " << num << std::endl;
-#endif
-                                    this->traces[ifirst->idx * this->nb_capture + num] = consumer.str();
-                                }
-                            }
-                        }
-
-                        if (stl->next_is_finish || (stl->is_terminate && !consumer.valid())) {
-                            //l2.pop_back();
-                            return active_capture ? ifirst->idx : 0;
-                        }
-
-                        if (stl->is_terminate && consumer.valid()) {
-                            continue ;
-                        }
-
-                        ifirst->rl = stl->next;
-                    }
-#ifdef DISPLAY_TRACE
-                    std::cout << "\t\033[35mreinsert (" << ifirst->consume << ")";
-                    if (active_capture) {
-                        std::cout << " idx: " << ifirst->idx;
-                    }
-                    std::cout << "\033[0m\n";
-#endif
-                    l2.push_back(*ifirst);
-                    if (active_capture) {
-                        ++new_trace;
-                    }
-                    continue ;
                 }
 
                 StateList * first = ifirst->rl->first;
@@ -1195,7 +1138,7 @@ namespace re {
                         continue ;
                     }
 
-                    if ((count_consume = first->st->check(c, consumer))) {
+                    if (first->l <= c && c <= first->r) {
 #ifdef DISPLAY_TRACE
                         this->display_elem_state_list(*first, active_capture ? ifirst->idx : 0);
 #endif
@@ -1203,7 +1146,8 @@ namespace re {
                             this->nums[first->next->st_num] = this->step_id;
                         }
 
-                        if (count_consume == 1 && !first->next && consumer.valid() && (exact_match || first->is_terminate)) {
+                        //TODO
+                        if (!first->next && consumer.valid() && (exact_match || first->is_terminate)) {
 #ifdef DISPLAY_TRACE
                             std::cout << "\t\033[35mx " << (ifirst->rl->st_num) << "\033[0m\n";
 #endif
@@ -1241,8 +1185,6 @@ namespace re {
                             }
                         };
 
-                        RangeList * const rl = count_consume == 1 ? first->next : reinterpret_cast<RangeList*>(first);
-
                         if (active_capture) {
                             unsigned idx = ifirst->idx;
                             if (new_trace) {
@@ -1251,20 +1193,18 @@ namespace re {
                             }
 
                             set_trace::open(idx, *first, s, *this, tracer);
-                            if (count_consume == 1) {
-                                set_trace::close(idx, *first, s, *this, tracer, consumer);
-                            }
+                            set_trace::close(idx, *first, s, *this, tracer, consumer);
 #ifdef DISPLAY_TRACE
                             std::cout << "\t\033[32m" << ifirst->idx << " -> " << idx << "\033[0m" << std::endl;
 #endif
-                            l2.push_back(rl, count_consume - 1, idx, first->num_close);
+                            l2.push_back(first->next, idx, first->num_close);
                             ++new_trace;
                         }
                         else {
-                            l2.push_back(rl, count_consume - 1);
+                            l2.push_back(first->next);
                         }
 
-                        if ((exact_match ? first->next_is_finish && !consumer.valid() : first->next_is_finish) || (first->is_terminate && count_consume == 1 && !consumer.valid())) {
+                        if ((exact_match ? first->next_is_finish && !consumer.valid() : first->next_is_finish) || (first->is_terminate && !consumer.valid())) {
                             //l2.pop_back();
                             return active_capture ? ifirst->idx : 0;
                         }
@@ -1406,33 +1346,6 @@ namespace re {
 
             if (!consumer.valid()) {
                 for (StepRangeIterator ifirst = pal1->begin(), ilast = pal1->end(); ifirst != ilast; ++ifirst) {
-                    if (ifirst->consume) {
-                        if (ifirst->consume != 1) {
-                            continue ;
-                        }
-
-                        if (active_capture) {
-                            if (ifirst->num_close != -1u) {
-                                unsigned num = ifirst->num_close;
-                                if (tracer.close(ifirst->idx, s, num)) {
-#ifdef DISPLAY_TRACE
-                                    std::cout << "\t" << ifirst->idx << " (close) " << num << std::endl;
-#endif
-                                    this->traces[ifirst->idx * this->nb_capture + num] = s;
-                                }
-                            }
-                        }
-
-                        const StateList * stl = reinterpret_cast<const StateList*>(ifirst->rl);
-                        if (!stl->next || stl->is_terminate) {
-                            if (active_capture) {
-                              this->set_idx_trace(ifirst->idx);
-                            }
-                            return true;
-                        }
-                        ifirst->rl = stl->next;
-                    }
-
                     if (this->nums[ifirst->rl->st_num] == this->step_id) {
                         if (active_capture) {
                             /**///std::cout << "\t\033[35mx " << (ifirst->idx) << "\033[0m\n";
@@ -1482,7 +1395,10 @@ namespace re {
         struct StateList
         {
             RangeList * next;
+            //NOTE st or (l,r)
             const State * st;
+            char_int l;
+            char_int r;
             unsigned num_open;
             unsigned num_close;
             bool next_is_finish;
