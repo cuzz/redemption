@@ -1,0 +1,68 @@
+g++ (Ubuntu/Linaro 4.6.2-10ubuntu1~11.10.1) 4.6.2
+icc (ICC) 14.0.1 20131008
+
+test_rdp_dest_blt
+gcc     icc
+4.90 s  5.98 s
+4.48 s  6.14 s
+4.68 s  5.96 s
+
+test_rdp_ellipse
+gcc     icc
+5.08 s  26.00 s
+5.26 s  26.09 s
+4.88 s  27.45 s
+
+test_rdp_line_to
+gcc     icc
+5.42 s  8.63 s
+5.58 s  9.28 s
+5.60 s  8.67 s
+
+test_rdp_mem_3_blt
+gcc     icc
+3.48 s  2.82 s
+4.37 s  5.20 s
+4.11 s  4.32 s
+
+test_rdp_mem_blt
+gcc     icc
+5.24 s  5.88 s
+5.17 s  5.82 s
+5.29 s  5.73 s
+
+test_rdp_opaque_rect
+gcc     icc
+4.90 s  5.81 s
+5.09 s  6.47 s
+5.21 s  5.70 s
+
+test_rdp_pat_blt
+gcc     icc
+4.98 s  6.46 s
+5.03 s  6.44 s
+4.85 s  6.49 s
+
+test_rdp_polygon_cb
+gcc     icc
+3.50 s  3.42 s
+3.40 s  3.29 s
+3.72 s  3.57 s
+
+test_rdp_polygon_sc
+gcc     icc
+4.58 s  4.11 s
+4.44 s  4.13 s
+4.41 s  4.16 s
+
+test_rdp_polyline
+gcc     icc
+4.00 s  3.74 s
+4.04 s  3.72 s
+4.04 s  3.82 s
+
+test_rdp_scr_blt
+gcc     icc
+5.52 s  51.88 s
+5.29 s  51.76 s
+5.27 s  51.91 s
