@@ -16,7 +16,7 @@ struct Op2_0x02 // R2_NOTMERGEPEN DPon
 {
 		ubyte opCall(ubyte target, ubyte source)
 		{
-				return ~(target | source);
+				return cast(ubyte)~(target | source);
 		}
 };
 struct Op2_0x03 // R2_MASKNOTPEN DPna
@@ -58,7 +58,7 @@ struct Op2_0x08 // R2_NOTMASKPEN DPan
 {
 		ubyte opCall(ubyte target, ubyte source)
 		{
-				return ~(target & source);
+				return cast(ubyte)~(target & source);
 		}
 };
 struct Op2_0x09 // R2_MASKPEN DPa
@@ -72,7 +72,7 @@ struct Op2_0x0A // R2_NOTXORPEN DPxn
 {
 		ubyte opCall(ubyte target, ubyte source)
 		{
-				return ~(target ^ source);
+				return cast(ubyte)~(target ^ source);
 		}
 };
 // struct Op2_0x0B // R2_NOP D
