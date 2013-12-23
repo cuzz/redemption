@@ -21,14 +21,17 @@
 // 	}
 // };
 
-int main(int ac, char ** av)
+int main()
 {
-	uint8_t a[127*127*32] = {0};
+#ifndef TYPEB
+	#define TYPEB uint8_t
+#endif
+	TYPEB a[127*127*32] = {0};
 	const unsigned x = 25;
 	const unsigned y = 25;
 	const unsigned cx = 100;
 	const unsigned cy = 100;
-	uint8_t * p = a + y * cx + x;
+	TYPEB * p = a + y * cx + x;
 // 	__builtin_prefetch(a, 1, 0);
 // 	display_timer auto_display_timer;
 	for (unsigned i = 0; i < 500000u; ++i) {
