@@ -223,7 +223,7 @@ namespace re {
 
         void display() const
         {
-            this->sm.display_states();
+//             this->sm.display_states();
         }
     };
 }

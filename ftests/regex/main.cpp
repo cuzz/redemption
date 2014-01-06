@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     const int optimize_mem = argc >= 4 && argv[3] ? atoi(argv[3]) : 0;
-    std::cout << "optimize_mem: " << optimize_mem << "\n";
+//     std::cout << "optimize_mem: " << optimize_mem << "\n";
     const char * rgxstr = argv[1];
     Regex regex(argv[1],
                 optimize_mem == 1
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
         std::cerr << regex.message_error() << " at position " << regex.position_error() << std::endl;
         return 2;
     }
-    regex.display();
+//     regex.display();
     std::cout.flush();
 
     if (argc < 3) {
@@ -74,6 +74,11 @@ int main(int argc, char **argv) {
         argv[1] = argv[2];
     }
 
+
+    std::cout << "----------\n## exact_search: " << regex.exact_search(argv[1]) << "\n";
+    std::cout << "----------\n";
+    std::cout << "----------\n## search: " << regex.search(argv[1]) << "\n";
+    return 0;
 
     //display_state(st);
 
@@ -94,7 +99,7 @@ int main(int argc, char **argv) {
     const char * str = argc > 1 ? argv[1] : "abcdef";
 
 #ifndef ITERATION
-# define ITERATION 100000
+# define ITERATION 1
 #endif
     {
         validregexec = regexec(&rgx, str, 1, regmatch, 0) == 0; //NOTE preload

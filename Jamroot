@@ -123,6 +123,7 @@ project redemption
 #     <cxxflags>-Wcast-qual
 #     <cxxflags>-Woverloaded-virtual
     <cxxflags>-fpie
+    <cxxflags>-std=c++0x
     <define>PUBLIC
    : default-build release
 
