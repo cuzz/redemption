@@ -89,8 +89,6 @@ OutputIt unique_merge(InputIt first1, InputIt last1,
 
 class StateMachine2
 {
-    StateMachine2(const StateMachine2&) /*= delete*/;
-
     class StateRange;
 
     struct NState {
@@ -862,9 +860,62 @@ public:
         }
     }
 
-#if __cplusplus >= 201103L && __cplusplus != 1 || defined(__GXX_EXPERIMENTAL_CXX0X__)
-    StateMachine2(StateMachine2 && /*other*/) noexcept
+    StateMachine2(const StateMachine2 & other)
+    : srss(0)
+    , s_sr_beg(0)
+    , s_sr_first(0)
+    , nb_states(other.nb_states)
+    , yes_beg(other.yes_beg)
+    , yes_finish(other.yes_finish)
     {
+        size_t count_nst = 0;
+        StateRangeSearch * first = other.srss;
+        StateRangeSearch * last = first + this->nb_states;
+        for (; first != last; ++first) {
+            count_nst += first->sz;
+        }
+
+        const size_t byte_srs = this->nb_states * sizeof(StateRangeSearch);
+        const size_t byte_st = count_nst * sizeof(NStateSearch);
+        const size_t byte_b = byte_srs + (byte_srs % sizeof(NStateSearch) ?  sizeof(NStateSearch) : 0);
+        this->srss = static_cast<StateRangeSearch*>(::operator new(byte_b + byte_st));
+        NStateSearch * pstss = reinterpret_cast<NStateSearch*>(reinterpret_cast<char*>(srss) + byte_b);
+        StateRangeSearch * csrss = srss;
+
+        first = other.srss;
+        last = first + this->nb_states;
+        for (; first != last; ++first) {
+            StateRangeSearch & sr = *first;
+            csrss->v = sr.sz ? pstss : nullptr;
+            csrss->is_finish = sr.is_finish;
+            csrss->sz = sr.sz;
+            NStateSearch * first2 = sr.v;
+            NStateSearch * last2 = sr.v + sr.sz;
+            for (; first2 != last2; ++first2) {
+                pstss->l = first2->l;
+                pstss->r = first2->r;
+                pstss->sr = srss + (first2->sr - other.srss);
+                ++pstss;
+            }
+            ++csrss;
+        }
+    }
+
+#if __cplusplus >= 201103L && __cplusplus != 1 || defined(__GXX_EXPERIMENTAL_CXX0X__)
+    StateMachine2(StateMachine2 && other) noexcept
+    {
+        this->srss = other.srss;
+        this->s_sr_beg = other.s_sr_beg;
+        this->s_sr_first = other.s_sr_first;
+        this->nb_states = other.nb_states;
+        this->yes_beg = other.yes_beg;
+        this->yes_finish = other.yes_finish;
+        other.srss = nullptr;
+        other.s_sr_beg = nullptr;
+        other.s_sr_first = nullptr;
+        other.nb_states = 0;
+        other.yes_beg = 0;
+        other.yes_finish = 0;
     }
 #endif
 
