@@ -23,6 +23,7 @@
 
 #include <regex.h>
 #include <pcre.h>
+#include <cstring>
 
 struct test_search
 {
@@ -41,34 +42,6 @@ struct test_search
     {
         this->regex.search(s);
     }
-};
-
-struct test_search_optimize_mem
-: test_search
-{
-    test_search_optimize_mem(const char* pattern)
-    : test_search(pattern, true)
-    {}
-};
-
-struct test_search_capture : test_search
-{
-    test_search_capture(const char * pattern, bool optimize_mem = false)
-    : test_search(pattern, optimize_mem)
-    {}
-
-    void exec(const char * s)
-    {
-        this->regex.search_with_matches(s);
-    }
-};
-
-struct test_search_capture_optimize_mem
-: test_search_capture
-{
-    test_search_capture_optimize_mem(const char* pattern)
-    : test_search_capture(pattern, true)
-    {}
 };
 
 struct test_pcre_search
@@ -354,14 +327,8 @@ int main()
 {
     std::cout << "search:\n";
     Bench<test_search>();
-    std::cout << "\n\nsearch (optmize_mem=true):\n";
-    Bench<test_search_optimize_mem>();
     std::cout << "\n\npcre search:\n";
     Bench<test_pcre_search>();
-    std::cout << "\n\nsearch with capture:\n";
-    Bench<test_search_capture>();
-    std::cout << "\n\nsearch with capture (optmize_mem=true):\n";
-    Bench<test_search_capture_optimize_mem>();
     std::cout << "\n\npcre search with capture:\n";
     Bench<test_pcre_search_capture>();
     std::cout << "\n\nposix search:\n";

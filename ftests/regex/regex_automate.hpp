@@ -27,9 +27,6 @@
 #include <utility>
 #include <algorithm>
 #include <iterator>
-#include <cstring> //memset
-#include <cassert>
-#include <stdint.h>
 
 #include "regex_utils.hpp"
 
@@ -98,10 +95,16 @@ class StateMachine2
 
     struct NState {
         std::vector<uint> nums;
-        std::vector<uint> captures;
         StateRange * sr;
         char_int l;
         char_int r;
+
+        bool operator==(NState const other) const
+        {
+            return other.nums == this->nums
+                && other.l == this->l
+                && other.r == this->r;
+        }
 
         bool is_range() const
         { return !(l > r); }
@@ -117,10 +120,17 @@ class StateMachine2
     {
         std::vector<unsigned> stg;
         std::vector<NState> v;
-        //std::vector<unsigned> caps;
         bool is_finish;
-        unsigned step;
-        unsigned num;
+    };
+
+    struct SameRange
+    {
+        StateRange const & csr;
+
+        bool operator()(StateRange& sr) const
+        {
+            return sr.is_finish == csr.is_finish && sr.v == csr.v;
+        }
     };
 
     class NStateSearch;
@@ -148,90 +158,21 @@ class StateMachine2
         { return 0 == r && 2 == l; }
     };
 
-    static void add_capture(NState & nst, const State * st)
+    bool add_beginning(std::vector<NState> & v, const State * st)
     {
         struct Impl {
-            static void run(NState & nst, const State * st) {
-                if (!st) {
-                    return ;
-                }
-
-                if (st->is_split()) {
-                    run(nst, st->out1);
-                    run(nst, st->out2);
-                }
-                else if (st->is_cap_close()) {
-                    nst.captures.push_back(st->num);
-                    run(nst, st->out1);
-                }
-                else if (st->type == LAST || st->type == FIRST) {
-                    run(nst, st->out1);
-                }
-            }
-        };
-
-        Impl::run(nst, st);
-    }
-
-    class temporary_push {
-        std::vector<unsigned> & caps;
-    public:
-        temporary_push(std::vector<unsigned> & captures, unsigned num)
-        : caps(captures)
-        {
-            this->caps.push_back(num);
-        }
-
-        ~temporary_push()
-        {
-            this->caps.pop_back();
-        }
-    };
-
-    class temporary_pop {
-        std::vector<unsigned> & caps;
-        unsigned x;
-    public:
-        temporary_pop(std::vector<unsigned> & captures)
-        : caps(captures)
-        , x(caps.back())
-        {
-            this->caps.pop_back();
-        }
-
-        ~temporary_pop()
-        {
-            this->caps.push_back(this->x);
-        }
-    };
-
-    bool add_beginning(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
-    {
-        struct Impl {
-            static bool run(std::vector<NState> & v, const State * st, bool is_beg,
-                            std::vector<unsigned> & caps) {
+            static bool run(std::vector<NState> & v, const State * st, bool is_beg) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
                 if (st->is_split()) {
-                    bool ret = run(v, st->out1, is_beg, caps);
-                    return run(v, st->out2, is_beg, caps) || ret;
+                    bool ret = run(v, st->out1, is_beg);
+                    return run(v, st->out2, is_beg) || ret;
                 }
 
                 if (st->type == FIRST) {
-                    return run(v, st->out1, true, caps);
-                }
-
-                if (st->is_cap_open()) {
-                    temporary_push temp_push(caps, st->num);
-                    return run(v, st->out1, is_beg, caps);
-                }
-                else if (st->is_cap_close()) {
-                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
-                        temporary_pop temp_pop(caps);
-                        return run(v, st->out1, is_beg, caps);
-                    }
+                    return run(v, st->out1, true);
                 }
 
                 if (!is_beg) {
@@ -239,184 +180,174 @@ class StateMachine2
                 }
 
                 else if (st->is_range()) {
-                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
+                    v.push_back({{st->num}, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, caps, nullptr, 1, 0});
+                    v.push_back({{st->num}, nullptr, 1, 0});
                 }
                 else {
-                    return run(v, st->out1, true, caps);
+                    return run(v, st->out1, true);
                 }
-
-                if (v.back().captures.empty()) {
-                    v.back().captures.push_back(-1u);
-                }
-
-                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st, false, caps_collector);
+        return Impl::run(v, st, false);
     }
 
-    static bool add_first(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
+    static bool add_first(std::vector<NState> & v, const State * st)
     {
         struct Impl {
-            static bool run(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps) {
+            static bool run(std::vector<NState> & v, const State * st) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
                 if (st->is_split()) {
-                    bool ret = run(v, st->out1, caps);
-                    return run(v, st->out2, caps) || ret;
-                }
-
-                if (st->is_cap_open()) {
-                    temporary_push temp_push(caps, st->num);
-                    return run(v, st->out1, caps);
-                }
-                else if (st->is_cap_close()) {
-                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
-                        temporary_pop temp_pop(caps);
-                        return run(v, st->out1, caps);
-                    }
+                    bool ret = run(v, st->out1);
+                    return run(v, st->out2) || ret;
                 }
 
                 if (st->is_range()) {
-                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
+                    v.push_back({{st->num}, nullptr, st->l, st->r});
                 }
                 else if (st->type == FIRST) {
                     return false;
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, caps, nullptr, 1, 0});
+                    v.push_back({{st->num}, nullptr, 1, 0});
                 }
                 else {
-                    return run(v, st->out1, caps);
+                    return run(v, st->out1);
                 }
-
-                if (v.back().captures.empty()) {
-                    v.back().captures.push_back(-1u);
-                }
-
-                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st, caps_collector);
+        return Impl::run(v, st);
     }
 
-    static bool add_next_sts(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
+    static bool add_next_sts(std::vector<NState> & v, const State * st)
     {
         struct Impl {
-            static bool run(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps) {
+            static bool run(std::vector<NState> & v, const State * st) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
                 if (st->is_split()) {
-                    bool ret = run(v, st->out1, caps);
-                    return run(v, st->out2, caps) || ret;
-                }
-
-                if (st->is_cap_open()) {
-                    temporary_push temp_push(caps, st->num);
-                    return run(v, st->out1, caps);
-                }
-                else if (st->is_cap_close()) {
-                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
-                        temporary_pop temp_pop(caps);
-                        return run(v, st->out1, caps);
-                    }
+                    bool ret = run(v, st->out1);
+                    return run(v, st->out2) || ret;
                 }
 
                 if (st->is_range()) {
-                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
+                    v.push_back({{st->num}, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, caps, nullptr, 1, 0});
+                    v.push_back({{st->num}, nullptr, 1, 0});
                 }
                 else if (st->type == FIRST) {
-                    v.push_back({{st->num}, caps, nullptr, 2, 0});
-                    //return run(v, st->out1, caps);
+                    v.push_back({{st->num}, nullptr, 2, 0});
+                    //return run(v, st->out1);
                 }
                 else {
-                    return run(v, st->out1, caps);
+                    return run(v, st->out1);
                 }
-
-                if (v.back().captures.empty()) {
-                    v.back().captures.push_back(-1u);
-                }
-
-                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st, caps_collector);
+        return Impl::run(v, st);
     }
 
-    const State * root;
-    unsigned nb_states;
-    mutable std::vector<StateRange> srs;
-    StateRange * sr_beg;
-    StateRange * sr_first;
-    StateRangeSearch * s_sr_beg;
-    StateRangeSearch * s_sr_first;
-    bool yes_beg;
-    bool yes_finish;
+    typedef std::pair<bool,bool> pre_cond_t;
 
-    StateRangeSearch * srss;
-    size_t srs_size;
-
-    template<bool> struct ExactMatch { };
-
-public:
-    bool exact_search_impl(const char * s) const
+    pre_cond_t pre_condition_search(const char * s) const
     {
-        return exact_search_impl(s, ExactMatch<true>());
-    }
-
-    template<bool exact_match>
-    bool exact_search_impl(const char * s, ExactMatch<exact_match>) const
-    {
-        //std::cout << "exact_search (exact = " << exact_match << ")\n";
-        //std::cout << "sr_beg: " << s_sr_beg << ", sr_first: " << s_sr_first << "\n";
+        if (0 == this->nb_states) {
+            return pre_cond_t(true, !*s);
+        }
 
         if (yes_finish) {
             RE_SHOW(std::cout << "yes_finish\n");
-            return true;
+            return pre_cond_t(true, true);
         }
 
         if (!s_sr_beg) {
             RE_SHOW(std::cout << "!s_sr_beg\n");
-            return yes_beg;
+            return pre_cond_t(true, yes_beg);
         }
 
         if (!s_sr_beg->v) {
             RE_SHOW(std::cout << "!s_sr_beg->v\n");
-            return true;
+            return pre_cond_t(true, true);
         }
 
         if (s_sr_beg->sz == 1 && s_sr_beg->v->is_terminate()) {
             if (yes_beg) {
                 RE_SHOW(std::cout << "is ^$");
-                return !*s;
+                return pre_cond_t(true, !*s);
             }
             else {
                 RE_SHOW(std::cout << "is_terminate\n");
-                return true;
+                return pre_cond_t(true, true);
+            }
+        }
+
+        return pre_cond_t(false, false);
+    }
+
+    struct set_auto_pos
+    {
+        size_t * pos;
+        const char * s;
+        utf8_consumer & consumer;
+
+        set_auto_pos(size_t * pos, const char * s, utf8_consumer & cons)
+        : pos(pos)
+        , s(s)
+        , consumer(cons)
+        {}
+
+        ~set_auto_pos()
+        {
+            if (this->pos) {
+                *this->pos = this->consumer.str() - this->s;
+            }
+        }
+    };
+
+    template<bool> struct ExactMatch { };
+
+    bool exact_search_impl(const char * s, size_t * pos) const
+    {
+        return exact_search_impl(s, ExactMatch<true>(), pos);
+    }
+
+    template<bool exact_match>
+    bool exact_search_impl(const char * s, ExactMatch<exact_match>, size_t * pos) const
+    {
+        //std::cout << "exact_search (exact = " << exact_match << ")\n";
+        //std::cout << "sr_beg: " << s_sr_beg << ", sr_first: " << s_sr_first << "\n";
+
+        if (pos) {
+            *pos = 0;
+        }
+
+        {
+            const pre_cond_t p = pre_condition_search(s);
+            if (p.first) {
+                return p.second;
             }
         }
 
         const StateRangeSearch * sr = s_sr_beg;
         utf8_consumer consumer(s);
+
+        set_auto_pos auto_pos(pos, s, consumer);
 
         next_char:
         while (consumer.valid()) {
@@ -451,53 +382,38 @@ public:
         return !sr->v || sr->is_finish;
     }
 
-    bool search_impl(const char * s) const
+    bool search_impl(const char * s, size_t * pos) const
     {
         //std::cout << "search\n";
         if (!s_sr_first) {
             RE_SHOW(std::cout << "call exact_search\n");
-            return exact_search_impl(s, ExactMatch<false>());
+            return exact_search_impl(s, ExactMatch<false>(), pos);
         }
 
-        if (yes_finish) {
-            RE_SHOW(std::cout << "yes_finish\n");
-            return true;
+        if (pos) {
+            *pos = 0;
         }
 
-        if (!s_sr_beg) {
-            RE_SHOW(std::cout << "!s_sr_beg\n");
-            return yes_beg;
-        }
-
-        if (!s_sr_beg->v) {
-            RE_SHOW(std::cout << "!s_sr_beg->v\n");
-            return true;
-        }
-
-        if (s_sr_beg->sz == 1 && s_sr_beg->v->is_terminate()) {
-            if (yes_beg) {
-                RE_SHOW(std::cout << "is ^$");
-                return !*s;
-            }
-            else {
-                RE_SHOW(std::cout << "is_terminate\n");
-                return true;
+        {
+            const pre_cond_t p = pre_condition_search(s);
+            if (p.first) {
+                return p.second;
             }
         }
 
-        if (!srs_size || !srss->v) {
+        if (!nb_states || !srss->v) {
             return true;
         }
 
-        for (size_t i = 0; i < srs_size; ++i) {
+        for (size_t i = 0; i < nb_states; ++i) {
             srss[i].step = 0;
         }
 
         unsigned step = 0;
         std::vector<StateRangeSearch*> srs1(1, s_sr_beg) /*({s_sr_beg})*/;
         std::vector<StateRangeSearch*> srs2;
-        srs1.reserve(srs_size);
-        srs2.reserve(srs_size);
+        srs1.reserve(nb_states);
+        srs2.reserve(nb_states);
 
         if (!s_sr_beg->v || s_sr_beg->is_finish) {
             RE_SHOW(std::cout << ("first is finish") << std::endl);
@@ -505,6 +421,9 @@ public:
         }
 
         utf8_consumer consumer(s);
+
+        set_auto_pos auto_pos(pos, s, consumer);
+
         while (consumer.valid()) {
             ++step;
             const char_int c = consumer.bumpc();
@@ -554,51 +473,70 @@ public:
         return false;
     }
 
-private:
-    void new_init(const state_list_t & sts)
+    StateRangeSearch * srss;
+    StateRangeSearch * s_sr_beg;
+    StateRangeSearch * s_sr_first;
+    size_t nb_states;
+    bool yes_beg;
+    bool yes_finish;
+
+public:
+    StateMachine2(const state_list_t & sts, const State * root, unsigned /*nb_capture*/,
+                bool /*copy_states*/ = false, bool /*minimal_mem*/ = false)
+    : srss(0)
+    , s_sr_beg(0)
+    , s_sr_first(0)
+    , nb_states(sts.size())
+    , yes_beg(false)
+    , yes_finish(false)
     {
+        if (!sts.size()) {
+            RE_SHOW(std::cout << "sts is empty\n");
+            return ;
+        }
+
+        std::vector<StateRange> srs;
+        StateRange * sr_beg = nullptr;
+        StateRange * sr_first = nullptr;
+
+        srs.push_back({{-1u}, {}, false});
         {
-            std::vector<unsigned> caps_collector;
+            StateRange & sr = srs.back();
+            if (add_beginning(sr.v, root)) {
+                yes_finish = true;
+                sr.is_finish = true;
+            }
+            if (!sr.v.empty()) {
+                yes_beg = true;
+                srs.push_back({{}, {}, false});
+                sr_beg = &sr;
+            }
+        }
+        {
+            StateRange & sr = srs.back();
+            if (add_first(sr.v, root)) {
+                yes_finish = true;
+                sr.is_finish = true;
+            }
+            if (!sr.v.empty()) {
+                sr_first = &sr;
+            }
+            else {
+                srs.pop_back();
+            }
+        }
 
-            srs.push_back({{-1u}, {}, false, 0, 0});
-            {
+        if (srs.empty()) {
+            return ;
+        }
+
+        //insert
+        for (State * st: sts) {
+            if (st->is_range() || st->type == LAST/* || st->type == FIRST*/) {
+                srs.push_back({{st->num}, {}, false});
                 StateRange & sr = srs.back();
-                if (add_beginning(sr.v, this->root, caps_collector)) {
-                    yes_finish = true;
+                if (add_next_sts(sr.v, st->out1)) {
                     sr.is_finish = true;
-                }
-                if (!sr.v.empty()) {
-                    yes_beg = true;
-                    srs.push_back({{}, {}, false, 0, 0});
-                    this->sr_beg = &sr;
-                }
-            }
-            {
-                StateRange & sr = srs.back();
-                if (add_first(sr.v, this->root, caps_collector)) {
-                    yes_finish = true;
-                    sr.is_finish = true;
-                }
-                if (!sr.v.empty()) {
-                    this->sr_first = &sr;
-                }
-                else {
-                    srs.pop_back();
-                }
-            }
-
-            if (srs.empty()) {
-                return ;
-            }
-
-            //insert
-            for (State * st: sts) {
-                if (st->is_range() || st->type == LAST) {
-                    srs.push_back({{st->num}, {}, false, 0, 0});
-                    StateRange & sr = srs.back();
-                    if (add_next_sts(sr.v, st->out1, caps_collector)) {
-                        sr.is_finish = true;
-                    }
                 }
             }
         }
@@ -606,15 +544,7 @@ private:
         if (!srs.empty()) {
             for (std::size_t i = srs.size(); i-- > 1;) {
                 StateRange const & csr = srs[i];
-                auto it = std::find_if(srs.begin(), srs.begin()+i, [csr](StateRange& sr){
-                    if (sr.is_finish == csr.is_finish && sr.v.size() == csr.v.size()) {
-                        return std::equal(sr.v.begin(), sr.v.end(), csr.v.begin(),
-                                          [](const NState & a, const NState & b) {
-                                            return a.l == b.l && a.r == b.r && a.nums == b.nums;
-                                          });
-                    }
-                    return false;
-                });
+                auto it = std::find_if(srs.begin(), srs.begin()+i, SameRange{csr});
                 if (it != srs.begin()+i) {
                     const unsigned new_id = it->stg[0];
                     const unsigned old_id = csr.stg[0];
@@ -665,10 +595,6 @@ private:
                             for (uint id: st.nums) {
                                 std::cout << id << ", ";
                             }
-                            std::cout << "\n\tcaptures: ";
-                            for (uint id: st.captures) {
-                                std::cout << id << ", ";
-                            }
                             std::cout << "\n";
                         }
                     }
@@ -685,9 +611,9 @@ private:
                 continue;
             }
             size_t ilast;
-            auto r = [this, ir](size_t i) -> char_int & { return srs[ir].v[i].r; };
-            auto l = [this, ir](size_t i) -> char_int & { return srs[ir].v[i].l; };
-            auto rmlast = [this, ir, &ilast](size_t i) {
+            auto r = [&srs, ir](size_t i) -> char_int & { return srs[ir].v[i].r; };
+            auto l = [&srs, ir](size_t i) -> char_int & { return srs[ir].v[i].l; };
+            auto rmlast = [&srs, ir, &ilast](size_t i) {
                 const size_t vli = srs[ir].v.size() - 1;
                 if (i < vli) {
                     srs[ir].v[i] = std::move(srs[ir].v.back());
@@ -697,18 +623,14 @@ private:
                 }
                 srs[ir].v.pop_back();
             };
-            auto addnext = [this, ir](size_t i, size_t i2) {
-                NState & nst1 = srs[ir].v[i];
-                NState & nst2 = srs[ir].v[i2];
+            auto addnext = [&srs, ir](size_t i, size_t i2) {
+                std::vector<unsigned> & v1 = srs[ir].v[i].nums;
+                std::vector<unsigned> & v2 = srs[ir].v[i2].nums;
 
-                auto merge = [](std::vector<unsigned> & v1, std::vector<unsigned> & v2){
-                    std::vector<unsigned> nums(v1.size() + v2.size());
-                    nums.erase(unique_merge(v1.begin(), v1.end(), v2.begin(), v2.end(), nums.begin()),
-                               nums.end());
-                    std::swap(nums, v1);
-                };
-                merge(nst1.nums, nst2.nums);
-                merge(nst1.captures, nst2.captures);
+                std::vector<unsigned> nums(v1.size() + v2.size());
+                nums.erase(unique_merge(v1.begin(), v1.end(), v2.begin(), v2.end(), nums.begin()),
+                           nums.end());
+                std::swap(nums, v1);
             };
             for (size_t i1 = 0; i1 < srs[ir].v.size(); ++i1) {
                 if (!srs[ir].v[i1].is_range()) {
@@ -772,7 +694,7 @@ private:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, l(i2)+1, r(i2)});
+                            srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, l(i2)+1, r(i2)});
                             --r(i1);
                             ++l(i2);
                             addnext(i2, i1);
@@ -793,7 +715,7 @@ private:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, l(i1)+1, r(i1)});
+                            srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, l(i1)+1, r(i1)});
                             --r(i2);
                             ++l(i1);
                             addnext(i1, i2);
@@ -803,7 +725,7 @@ private:
                     //   [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) < r(i2) && l(i2) > r(i1)) {
                         //std::cout << "[1 [2 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
                         r(i1) = l(i2) - 1;
                         r(i2) = r(i1);
                         addnext(i2, i1);
@@ -812,7 +734,7 @@ private:
                     //   [l1 r1]
                     else if (l(i2) < l(i1) && r(i2) < r(i1) && l(i1) > r(i2)) {
                         //std::cout << "[2 [1 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
                         r(i2) = l(i1) - 1;
                         r(i1) = r(i2);
                         addnext(i1, i2);
@@ -821,7 +743,7 @@ private:
                     //  [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) > r(i2)) {
                         //std::cout << "[1 [2 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
                         r(i1) = l(i2) - 1;
                         addnext(i2, i1);
                     }
@@ -829,7 +751,7 @@ private:
                     //  [l1 r1]
                     else if (l(i1) > l(i2) && r(i1) < r(i2)) {
                         //std::cout << "[2 [1 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
                         r(i2) = l(i1) - 1;
                         addnext(i1, i2);
                     }
@@ -841,7 +763,7 @@ private:
                 if (std::none_of(srs.begin(), srs.end(), [nsts](const StateRange & sr) {
                     return sr.stg == nsts.nums;
                 })) {
-                    srs.push_back({nsts.nums, {}, false, 0, 0});
+                    srs.push_back({nsts.nums, {}, false});
                     auto & v = srs.back().v;
                     bool & is_finish = srs.back().is_finish;
                     for (unsigned id: nsts.nums) {
@@ -849,12 +771,29 @@ private:
                         , [id](const StateRange & sr) {
                             return sr.stg[0] == id;
                         });
-                        v.insert(v.end(), it->v.begin(), it->v.end());
                         is_finish |= it->is_finish || it->v.empty();
+                        v.insert(v.end(), it->v.begin(), it->v.end());
                     }
                 }
             }
 
+            display(srs);
+        }
+
+        //TODO erase unused StateRange
+        {
+            srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) -> bool {
+                for (const StateRange & sr2: srs) {
+                    for (const NState & nst : sr2.v) {
+                        if (sr.stg == nst.nums) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }), srs.end());
+
+            RE_SHOW(std::cout << "##erase\n--------\n");
             display(srs);
         }
 
@@ -875,8 +814,6 @@ private:
                 }
             }
         }
-
-        //TODO erase unused StateRange
 
         {
             size_t count_nst = 0;
@@ -902,7 +839,7 @@ private:
                 ++csrss;
             }
         }
-        srs_size = srs.size();
+        nb_states = srs.size();
 
         if (sr_beg && sr_first) {
             s_sr_beg = srss + 0;
@@ -915,25 +852,7 @@ private:
             s_sr_first = srss + 0;
             s_sr_beg = srss + 0;
         }
-    }
 
-public:
-    StateMachine2(const state_list_t & sts, const State * root, unsigned /*nb_capture*/,
-                bool /*copy_states*/ = false, bool /*minimal_mem*/ = false)
-    : root(root)
-    , nb_states(sts.size())
-    , sr_beg(0)
-    , sr_first(0)
-    , s_sr_beg(0)
-    , s_sr_first(0)
-    , yes_beg(false)
-    , yes_finish(false)
-    , srss(0)
-    , srs_size(0)
-    {
-        if (sts.size()) {
-            new_init(sts);
-        }
         if (g_trace_active) {
             std::cout <<
                 "yes_beg: " << (yes_beg) << "\n"
@@ -970,48 +889,41 @@ public:
     };
 
 public:
-    bool exact_search(const char * s, unsigned /*step_limit*/, size_t * /*pos*/ = 0)
+    bool exact_search(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
     {
-        if (0 == this->nb_states) {
-            return !*s;
-        }
-        return this->exact_search_impl(s);
+        return this->exact_search_impl(s, pos);
     }
 
-    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, size_t * /*pos*/ = 0)
+    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
     {
-        return exact_search_impl(s);
+        return exact_search_impl(s, pos);
     }
 
     template<typename Tracer>
-    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * /*pos*/ = 0)
+    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * pos = 0)
     {
-        return exact_search_impl(s);
+        return exact_search_impl(s, pos);
     }
 
-    bool search(const char * s, unsigned /*step_limit*/, size_t * /*pos*/ = 0)
+    bool search(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
     {
-        if (0 == this->nb_states) {
-            return !*s;
-        }
-        return this->search_impl(s);
+        return this->search_impl(s, pos);
     }
 
-    bool search_with_trace(const char * s, unsigned /*step_limit*/, size_t * /*pos*/ = 0)
+    bool search_with_trace(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
     {
-        return search_impl(s);
+        return search_impl(s, pos);
     }
 
     template<typename Tracer>
-    bool search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * /*pos*/ = 0)
+    bool search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * pos = 0)
     {
-        return search_impl(s);
+        return search_impl(s, pos);
     }
 
     range_matches match_result(bool /*all*/ = true) const
     {
-        range_matches ret;
-        return ret;
+        return range_matches();
     }
 
     void append_match_result(range_matches& /*ranges*/, bool /*all*/ = true) const
