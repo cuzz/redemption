@@ -26,7 +26,7 @@
 #include <vector>
 #include <utility>
 #include <algorithm>
-#include <iomanip>
+#include <iterator>
 #include <cstring> //memset
 #include <cassert>
 #include <stdint.h>
@@ -42,6 +42,54 @@ namespace re {
 
 #define RE_SHOW !::re::g_trace_active ? void() : void
 
+template<typename InputIt, typename InputIt2, typename OutputIt>
+OutputIt unique_merge(InputIt first1, InputIt last1,
+                      InputIt2 first2, InputIt2 last2,
+                      OutputIt d_first)
+{
+    if (first1 != last1 && first2 != last2) {
+        typedef typename std::iterator_traits<InputIt>::value_type value_type;
+        value_type x = (*first1 < *first2) ? *first1++ : *first2++;
+        *d_first = x;
+        ++d_first;
+
+        while (first1 != last1) {
+            if (first2 == last2) {
+                while (first1 != last1 && x == *first1) {
+                    ++first1;
+                }
+                d_first = std::unique_copy(first1, last1, d_first);
+                break ;
+            }
+            if (*first2 < *first1) {
+                if (x != *first2) {
+                    x = *first2;
+                    *d_first = x;
+                    ++d_first;
+                }
+                ++first2;
+            } else {
+                if (x != *first1) {
+                    x = *first1;
+                    *d_first = x;
+                    ++d_first;
+                }
+                ++first1;
+            }
+        }
+
+        while (first2 != last2 && x == *first2) {
+            ++first2;
+        }
+    }
+    else if (first1 != last1) {
+        return std::unique_copy(first1, last1, d_first);
+    }
+
+    return std::unique_copy(first2, last2, d_first);
+}
+
+
 class StateMachine2
 {
     StateMachine2(const StateMachine2&) /*= delete*/;
@@ -50,6 +98,7 @@ class StateMachine2
 
     struct NState {
         std::vector<uint> nums;
+        std::vector<uint> captures;
         StateRange * sr;
         char_int l;
         char_int r;
@@ -99,21 +148,90 @@ class StateMachine2
         { return 0 == r && 2 == l; }
     };
 
-    bool add_beginning(std::vector<NState> & v, const State * st)
+    static void add_capture(NState & nst, const State * st)
     {
         struct Impl {
-            static bool run(std::vector<NState> & v, const State * st, bool is_beg) {
+            static void run(NState & nst, const State * st) {
+                if (!st) {
+                    return ;
+                }
+
+                if (st->is_split()) {
+                    run(nst, st->out1);
+                    run(nst, st->out2);
+                }
+                else if (st->is_cap_close()) {
+                    nst.captures.push_back(st->num);
+                    run(nst, st->out1);
+                }
+                else if (st->type == LAST || st->type == FIRST) {
+                    run(nst, st->out1);
+                }
+            }
+        };
+
+        Impl::run(nst, st);
+    }
+
+    class temporary_push {
+        std::vector<unsigned> & caps;
+    public:
+        temporary_push(std::vector<unsigned> & captures, unsigned num)
+        : caps(captures)
+        {
+            this->caps.push_back(num);
+        }
+
+        ~temporary_push()
+        {
+            this->caps.pop_back();
+        }
+    };
+
+    class temporary_pop {
+        std::vector<unsigned> & caps;
+        unsigned x;
+    public:
+        temporary_pop(std::vector<unsigned> & captures)
+        : caps(captures)
+        , x(caps.back())
+        {
+            this->caps.pop_back();
+        }
+
+        ~temporary_pop()
+        {
+            this->caps.push_back(this->x);
+        }
+    };
+
+    bool add_beginning(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
+    {
+        struct Impl {
+            static bool run(std::vector<NState> & v, const State * st, bool is_beg,
+                            std::vector<unsigned> & caps) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
                 if (st->is_split()) {
-                    bool ret = run(v, st->out1, is_beg);
-                    return run(v, st->out2, is_beg) || ret;
+                    bool ret = run(v, st->out1, is_beg, caps);
+                    return run(v, st->out2, is_beg, caps) || ret;
                 }
 
                 if (st->type == FIRST) {
-                    return run(v, st->out1, true);
+                    return run(v, st->out1, true, caps);
+                }
+
+                if (st->is_cap_open()) {
+                    temporary_push temp_push(caps, st->num);
+                    return run(v, st->out1, is_beg, caps);
+                }
+                else if (st->is_cap_close()) {
+                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
+                        temporary_pop temp_pop(caps);
+                        return run(v, st->out1, is_beg, caps);
+                    }
                 }
 
                 if (!is_beg) {
@@ -121,86 +239,127 @@ class StateMachine2
                 }
 
                 else if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
+                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({{st->num}, caps, nullptr, 1, 0});
                 }
                 else {
-                    return run(v, st->out1, true);
+                    return run(v, st->out1, true, caps);
                 }
+
+                if (v.back().captures.empty()) {
+                    v.back().captures.push_back(-1u);
+                }
+
+                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st, false);
+        return Impl::run(v, st, false, caps_collector);
     }
 
-    static bool add_first(std::vector<NState> & v, const State * st)
+    static bool add_first(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
     {
         struct Impl {
-            static bool run(std::vector<NState> & v, const State * st) {
+            static bool run(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
                 if (st->is_split()) {
-                    bool ret = run(v, st->out1);
-                    return run(v, st->out2) || ret;
+                    bool ret = run(v, st->out1, caps);
+                    return run(v, st->out2, caps) || ret;
                 }
 
-                if (st->type == FIRST) {
+                if (st->is_cap_open()) {
+                    temporary_push temp_push(caps, st->num);
+                    return run(v, st->out1, caps);
+                }
+                else if (st->is_cap_close()) {
+                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
+                        temporary_pop temp_pop(caps);
+                        return run(v, st->out1, caps);
+                    }
+                }
+
+                if (st->is_range()) {
+                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
+                }
+                else if (st->type == FIRST) {
                     return false;
                 }
-                else if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
-                }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({{st->num}, caps, nullptr, 1, 0});
                 }
                 else {
-                    return run(v, st->out1);
+                    return run(v, st->out1, caps);
                 }
+
+                if (v.back().captures.empty()) {
+                    v.back().captures.push_back(-1u);
+                }
+
+                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st);
+        return Impl::run(v, st, caps_collector);
     }
 
-    static bool add_next_sts(std::vector<NState> & v, const State * st)
+    static bool add_next_sts(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps_collector)
     {
         struct Impl {
-            static bool run(std::vector<NState> & v, const State * st) {
+            static bool run(std::vector<NState> & v, const State * st, std::vector<unsigned> & caps) {
                 if (!st || st->is_finish()) {
                     return true;
                 }
 
+                if (st->is_split()) {
+                    bool ret = run(v, st->out1, caps);
+                    return run(v, st->out2, caps) || ret;
+                }
+
+                if (st->is_cap_open()) {
+                    temporary_push temp_push(caps, st->num);
+                    return run(v, st->out1, caps);
+                }
+                else if (st->is_cap_close()) {
+                    if (std::find(caps.begin(), caps.end(), st->num-1) != caps.end()) {
+                        temporary_pop temp_pop(caps);
+                        return run(v, st->out1, caps);
+                    }
+                }
+
                 if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
+                    v.push_back({{st->num}, caps, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({{st->num}, caps, nullptr, 1, 0});
                 }
                 else if (st->type == FIRST) {
-                    v.push_back({{st->num}, nullptr, 2, 0});
-                    return run(v, st->out1);
-                }
-                else if (st->is_split()) {
-                    bool ret = run(v, st->out1);
-                    return run(v, st->out2) || ret;
+                    v.push_back({{st->num}, caps, nullptr, 2, 0});
+                    //return run(v, st->out1, caps);
                 }
                 else {
-                    return run(v, st->out1);
+                    return run(v, st->out1, caps);
                 }
+
+                if (v.back().captures.empty()) {
+                    v.back().captures.push_back(-1u);
+                }
+
+                add_capture(v.back(), st->out1);
 
                 return false;
             }
         };
 
-        return Impl::run(v, st);
+        return Impl::run(v, st, caps_collector);
     }
 
     const State * root;
@@ -398,46 +557,48 @@ public:
 private:
     void new_init(const state_list_t & sts)
     {
-        srs.push_back({{-1u}, {}, false});
         {
-            StateRange & sr = srs.back();
-            if (add_beginning(sr.v, this->root)) {
-                yes_finish = true;
-                sr.is_finish = true;
-            }
-            if (!sr.v.empty()) {
-                yes_beg = true;
-                srs.push_back({{}, {}, false});
-                this->sr_beg = &sr;
-            }
-        }
-        {
-            StateRange & sr = srs.back();
-            if (add_first(sr.v, this->root)) {
-                yes_finish = true;
-                sr.is_finish = true;
-            }
-            if (!sr.v.empty()) {
-                this->sr_first = &sr;
-            }
-            else {
-                srs.pop_back();
-            }
-        }
+            std::vector<unsigned> caps_collector;
 
-        if (srs.empty()) {
-            return ;
-        }
-
-        const size_t first_range_pos = sr_first && sr_beg ? 2 : 1;
-
-        //insert
-        for (State * st: sts) {
-            if (st->is_range() || st->type == LAST) {
-                srs.push_back({{st->num}, {}, false});
+            srs.push_back({{-1u}, {}, false, 0, 0});
+            {
                 StateRange & sr = srs.back();
-                if (add_next_sts(sr.v, st->out1)) {
+                if (add_beginning(sr.v, this->root, caps_collector)) {
+                    yes_finish = true;
                     sr.is_finish = true;
+                }
+                if (!sr.v.empty()) {
+                    yes_beg = true;
+                    srs.push_back({{}, {}, false, 0, 0});
+                    this->sr_beg = &sr;
+                }
+            }
+            {
+                StateRange & sr = srs.back();
+                if (add_first(sr.v, this->root, caps_collector)) {
+                    yes_finish = true;
+                    sr.is_finish = true;
+                }
+                if (!sr.v.empty()) {
+                    this->sr_first = &sr;
+                }
+                else {
+                    srs.pop_back();
+                }
+            }
+
+            if (srs.empty()) {
+                return ;
+            }
+
+            //insert
+            for (State * st: sts) {
+                if (st->is_range() || st->type == LAST) {
+                    srs.push_back({{st->num}, {}, false, 0, 0});
+                    StateRange & sr = srs.back();
+                    if (add_next_sts(sr.v, st->out1, caps_collector)) {
+                        sr.is_finish = true;
+                    }
                 }
             }
         }
@@ -457,7 +618,7 @@ private:
                 if (it != srs.begin()+i) {
                     const unsigned new_id = it->stg[0];
                     const unsigned old_id = csr.stg[0];
-                    RE_SHOW(std::cout << "old_id: " << old_id << "\nnew_id: " << new_id << std::endl);
+                    RE_SHOW(std::cout << "old_id: " << old_id << "\tnew_id: " << new_id << std::endl);
                     for (StateRange & sr: srs) {
                         for (NState & nst: sr.v) {
                             if (nst.nums[0] == old_id) {
@@ -474,15 +635,11 @@ private:
             void operator()(std::vector<StateRange> & srs) const {
                 if (g_trace_active) {
                     for (StateRange & sr : srs) {
-                        if (sr.stg.empty()) { //only first
-                            std::cout << ("range: nil");
+                        std::cout << ("ranges: ");
+                        for (unsigned num: sr.stg) {
+                            std::cout << num << ", ";
                         }
-                        else {
-                            std::cout << ("range: ");
-                            for (unsigned num: sr.stg) {
-                                std::cout << num << ", ";
-                            }
-                        }
+
                         if (sr.v.empty()) {
                             std::cout << "\t(empty)";
                         }
@@ -506,6 +663,10 @@ private:
                             }
 
                             for (uint id: st.nums) {
+                                std::cout << id << ", ";
+                            }
+                            std::cout << "\n\tcaptures: ";
+                            for (uint id: st.captures) {
                                 std::cout << id << ", ";
                             }
                             std::cout << "\n";
@@ -537,47 +698,17 @@ private:
                 srs[ir].v.pop_back();
             };
             auto addnext = [this, ir](size_t i, size_t i2) {
-                auto & v = srs[ir].v[i].nums;
-                auto & v2 = srs[ir].v[i2].nums;
+                NState & nst1 = srs[ir].v[i];
+                NState & nst2 = srs[ir].v[i2];
 
-                std::vector<unsigned> nums(v.size() + v2.size());
-
-                auto first1 = v.begin();
-                auto last1 = v.end();
-                auto first2 = v2.begin();
-                auto last2 = v2.end();
-                auto d_first = nums.begin();
-                unsigned n = -2u;
-
-                while (first1 != last1) {
-                    if (first2 == last2) {
-                        while (first1 != last1 && n == *first1) {
-                            ++first1;
-                        }
-                        d_first = std::unique_copy(first1, last1, d_first);
-                        break ;
-                    }
-                    if (*first2 < *first1) {
-                        if (n != *first2) {
-                            n = *d_first = *first2;
-                            ++d_first;
-                        }
-                        ++first2;
-                    } else {
-                        if (n != *first1) {
-                            n = *d_first = *first1;
-                            ++d_first;
-                        }
-                        ++first1;
-                    }
-                }
-                while (first2 != last2 && n == *first2) {
-                    ++first2;
-                }
-                d_first = std::unique_copy(first2, last2, d_first);
-                nums.erase(d_first, nums.end());
-
-                std::swap(nums, v);
+                auto merge = [](std::vector<unsigned> & v1, std::vector<unsigned> & v2){
+                    std::vector<unsigned> nums(v1.size() + v2.size());
+                    nums.erase(unique_merge(v1.begin(), v1.end(), v2.begin(), v2.end(), nums.begin()),
+                               nums.end());
+                    std::swap(nums, v1);
+                };
+                merge(nst1.nums, nst2.nums);
+                merge(nst1.captures, nst2.captures);
             };
             for (size_t i1 = 0; i1 < srs[ir].v.size(); ++i1) {
                 if (!srs[ir].v[i1].is_range()) {
@@ -641,7 +772,7 @@ private:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, l(i2)+1, r(i2)});
+                            srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, l(i2)+1, r(i2)});
                             --r(i1);
                             ++l(i2);
                             addnext(i2, i1);
@@ -662,7 +793,7 @@ private:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, l(i1)+1, r(i1)});
+                            srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, l(i1)+1, r(i1)});
                             --r(i2);
                             ++l(i1);
                             addnext(i1, i2);
@@ -672,7 +803,7 @@ private:
                     //   [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) < r(i2) && l(i2) > r(i1)) {
                         //std::cout << "[1 [2 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, r(i1)+1, r(i2)});
                         r(i1) = l(i2) - 1;
                         r(i2) = r(i1);
                         addnext(i2, i1);
@@ -681,7 +812,7 @@ private:
                     //   [l1 r1]
                     else if (l(i2) < l(i1) && r(i2) < r(i1) && l(i1) > r(i2)) {
                         //std::cout << "[2 [1 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, r(i2)+1, r(i1)});
                         r(i2) = l(i1) - 1;
                         r(i1) = r(i2);
                         addnext(i1, i2);
@@ -690,7 +821,7 @@ private:
                     //  [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) > r(i2)) {
                         //std::cout << "[1 [2 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].nums, {}, nullptr, r(i2)+1, r(i1)});
                         r(i1) = l(i2) - 1;
                         addnext(i2, i1);
                     }
@@ -698,7 +829,7 @@ private:
                     //  [l1 r1]
                     else if (l(i1) > l(i2) && r(i1) < r(i2)) {
                         //std::cout << "[2 [1 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].nums, {}, nullptr, r(i1)+1, r(i2)});
                         r(i2) = l(i1) - 1;
                         addnext(i1, i2);
                     }
@@ -710,11 +841,11 @@ private:
                 if (std::none_of(srs.begin(), srs.end(), [nsts](const StateRange & sr) {
                     return sr.stg == nsts.nums;
                 })) {
-                    srs.push_back({nsts.nums, {}, false});
+                    srs.push_back({nsts.nums, {}, false, 0, 0});
                     auto & v = srs.back().v;
                     bool & is_finish = srs.back().is_finish;
                     for (unsigned id: nsts.nums) {
-                        auto it = std::find_if(srs.begin()+first_range_pos, srs.begin() + simple_srs_limit
+                        auto it = std::find_if(srs.begin(), srs.begin() + simple_srs_limit
                         , [id](const StateRange & sr) {
                             return sr.stg[0] == id;
                         });
