@@ -146,77 +146,15 @@ namespace re {
             return this->parser.pos_err;
         }
 
-        typedef std::vector<std::pair<const char*,const char*> > range_matches;
-
-        range_matches exact_match(const char * s, bool /*all_match*/ = true)
-        {
-            range_matches ret;
-            this->sm.exact_test(s, &this->pos);
-            return ret;
-        }
-
-        template<typename Tracer>
-        range_matches exact_match(const char * s, Tracer /*tracer*/, bool /*all_match*/ = true)
-        {
-            range_matches ret;
-            this->sm.exact_test(s, &this->pos);
-            return ret;
-        }
-
-        range_matches match(const char * s, bool /*all_match*/ = true)
-        {
-            range_matches ret;
-            this->sm.test(s, &this->pos);
-            return ret;
-        }
-
-        template<typename Tracer>
-        range_matches match(const char * s, Tracer /*tracer*/, bool /*all_match*/ = true)
-        {
-            range_matches ret;
-            this->sm.test(s, &this->pos);
-            return ret;
-        }
-
         bool exact_search(const char * s)
         {
-            return this->sm.exact_test(s, &this->pos);
+            return ::re::exact_test(this->sm, s, &this->pos);
         }
 
         bool search(const char * s)
         {
-            return this->sm.test(s, &this->pos);
+            return ::re::search_test(this->sm, s, &this->pos);
         }
-
-        bool exact_search_with_matches(const char * s)
-        {
-            return this->sm.exact_test(s, &this->pos);
-        }
-
-        template<typename Tracer>
-        bool exact_search_with_matches(const char * s, Tracer /*tracer*/)
-        {
-            return this->sm.exact_test(s, &this->pos);
-        }
-
-        bool search_with_matches(const char * s)
-        {
-            return this->sm.test(s, &this->pos);
-        }
-
-        template<typename Tracer>
-        bool search_with_matches(const char * s, Tracer /*tracer*/)
-        {
-            return this->sm.test(s, &this->pos);
-        }
-
-        range_matches match_result(bool /*all*/ = true) const
-        {
-            return range_matches();
-        }
-
-        void display() const
-        {}
     };
 }
 
