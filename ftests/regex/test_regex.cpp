@@ -108,17 +108,50 @@ void test_re(re::Regex::flag_t flags)
     regex_test(regex, "a", 0, 0);
     regex_test(regex, "", 1, 1);
 
-//     str_regex = "$^";
-//     regex.reset(str_regex, flags);
-//     if (regex.message_error()) {
-//         std::ostringstream os;
-//         os << str_regex << (regex.message_error())
-//         << " at offset " << regex.position_error();
-//         BOOST_CHECK_MESSAGE(false, os.str());
-//     }
-//     regex_test(regex, "aaa", 0, 0);
-//     regex_test(regex, "a", 0, 0);
-//     regex_test(regex, "", 1, 1);
+    str_regex = "d|$";
+    regex.reset(str_regex, flags);
+    if (regex.message_error()) {
+        std::ostringstream os;
+        os << str_regex << (regex.message_error())
+        << " at offset " << regex.position_error();
+        BOOST_CHECK_MESSAGE(false, os.str());
+    }
+    regex_test(regex, "aaa", 1, 1);
+    regex_test(regex, "", 1, 1);
+
+    str_regex = "d|^";
+    regex.reset(str_regex, flags);
+    if (regex.message_error()) {
+        std::ostringstream os;
+        os << str_regex << (regex.message_error())
+        << " at offset " << regex.position_error();
+        BOOST_CHECK_MESSAGE(false, os.str());
+    }
+    regex_test(regex, "aaa", 1, 1);
+    regex_test(regex, "", 1, 1);
+
+    str_regex = "$|^";
+    regex.reset(str_regex, flags);
+    if (regex.message_error()) {
+        std::ostringstream os;
+        os << str_regex << (regex.message_error())
+        << " at offset " << regex.position_error();
+        BOOST_CHECK_MESSAGE(false, os.str());
+    }
+    regex_test(regex, "aaa", 1, 1);
+    regex_test(regex, "", 1, 1);
+
+    str_regex = "$^";
+    regex.reset(str_regex, flags);
+    if (regex.message_error()) {
+        std::ostringstream os;
+        os << str_regex << (regex.message_error())
+        << " at offset " << regex.position_error();
+        BOOST_CHECK_MESSAGE(false, os.str());
+    }
+    regex_test(regex, "aaa", 0, 0);
+    regex_test(regex, "a", 0, 0);
+    regex_test(regex, "", 1, 1);
 
     const char * str = "";
     regex_test(regex, "", 1, 1);
@@ -366,7 +399,6 @@ void test_re(re::Regex::flag_t flags)
     }
     str = "abvd";
     regex_test(regex, str, 1, 1);
-//     BOOST_CHECK(regex.match_result(false) == matches);
 
     str = "avd";
     regex_test(regex, str, 1, 1);
@@ -460,8 +492,3 @@ BOOST_AUTO_TEST_CASE(TestRegex)
 {
     test_re(re::Regex::DEFAULT_FLAG);
 }
-
-// BOOST_AUTO_TEST_CASE(TestRegexOptimize)
-// {
-//     test_re(re::Regex::MINIMAL_MEMORY|re::Regex::OPTIMIZE_MEMORY);
-// }

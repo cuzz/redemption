@@ -269,14 +269,14 @@ class StateMachine2
             return pre_cond_t(true, !*s);
         }
 
-        if (yes_finish) {
-            RE_SHOW(std::cout << "yes_finish\n");
+        if (is_finish) {
+            RE_SHOW(std::cout << "is_finish\n");
             return pre_cond_t(true, true);
         }
 
         if (!s_sr_beg) {
             RE_SHOW(std::cout << "!s_sr_beg\n");
-            return pre_cond_t(true, yes_beg);
+            return pre_cond_t(true, has_bol);
         }
 
         if (!s_sr_beg->v) {
@@ -284,8 +284,18 @@ class StateMachine2
             return pre_cond_t(true, true);
         }
 
+        if (has_eol && !has_bol) {
+            RE_SHOW(std::cout << "has_eol && !has_bol\n");
+            return pre_cond_t(true, true);
+        }
+
+        if (s_sr_beg->sz > 1 && has_bol && has_eol && !*s) {
+            RE_SHOW(std::cout << "is ^$\n");
+            return pre_cond_t(true, true);
+        }
+
         if (s_sr_beg->sz == 1 && s_sr_beg->v->is_terminate()) {
-            if (yes_beg) {
+            if (has_bol && has_eol) {
                 RE_SHOW(std::cout << "is ^$\n");
                 return pre_cond_t(true, !*s);
             }
@@ -296,6 +306,26 @@ class StateMachine2
         }
 
         return pre_cond_t(false, false);
+    }
+
+    bool post_condition_search(StateRangeSearch const * sr) const
+    {
+        RE_SHOW(std::cout << "! st.v.empty" << std::endl);
+        next_search:
+        while (sr) {
+            for (size_t i = 0; i < sr->sz; ++i) {
+                if (sr->v[i].is_terminate()) {
+                    RE_SHOW(std::cout << "is_terminate" << std::endl);
+                    sr = sr->v[i].sr;
+                    if (sr->is_finish) {
+                        return true;
+                    }
+                    goto next_search;
+                }
+            }
+            break ;
+        }
+        return false;
     }
 
     struct set_auto_pos
@@ -369,11 +399,8 @@ class StateMachine2
         }
 
         if (sr->v && !sr->is_finish) {
-            RE_SHOW(std::cout << "! st.v.empty" << std::endl);
-            for (size_t i = 0; i < sr->sz; ++i) {
-                if (sr->v[i].is_terminate()) {
-                    return true;
-                }
+            if (post_condition_search(sr)) {
+                return true;
             }
         }
 
@@ -451,12 +478,8 @@ class StateMachine2
 
         for (StateRangeSearch const * sr: srs1) {
             if (sr->v && !sr->is_finish) {
-                RE_SHOW(std::cout << "! st.v.empty" << std::endl);
-                for (size_t i = 0; i < sr->sz; ++i) {
-                    if (sr->v[i].is_terminate()) {
-                        RE_SHOW(std::cout << "is_terminate" << std::endl);
-                        return true;
-                    }
+                if (post_condition_search(sr)) {
+                    return true;
                 }
             }
             else {
@@ -507,8 +530,9 @@ class StateMachine2
     StateRangeSearch * s_sr_beg;
     StateRangeSearch * s_sr_first;
     size_t nb_states;
-    bool yes_beg;
-    bool yes_finish;
+    bool has_bol;
+    bool has_eol;
+    bool is_finish;
 
 public:
     StateMachine2(const state_list_t & sts, const State * root, unsigned /*nb_capture*/,
@@ -517,8 +541,9 @@ public:
     , s_sr_beg(0)
     , s_sr_first(0)
     , nb_states(sts.size())
-    , yes_beg(false)
-    , yes_finish(false)
+    , has_bol(false)
+    , has_eol(false)
+    , is_finish(false)
     {
         if (!sts.size()) {
             RE_SHOW(std::cout << "sts is empty\n");
@@ -533,11 +558,11 @@ public:
         {
             StateRange & sr = srs.back();
             if (add_beginning(sr.v, root)) {
-                yes_finish = true;
+                is_finish = true;
                 sr.is_finish = true;
             }
             if (!sr.v.empty()) {
-                yes_beg = true;
+                has_bol = true;
                 srs.push_back({{}, {}, false});
                 sr_beg = &sr;
             }
@@ -545,7 +570,7 @@ public:
         {
             StateRange & sr = srs.back();
             if (add_first(sr.v, root)) {
-                yes_finish = true;
+                is_finish = true;
                 sr.is_finish = true;
             }
             if (!sr.v.empty()) {
@@ -664,20 +689,19 @@ public:
             };
             for (size_t i1 = 0; i1 < srs[ir].v.size(); ++i1) {
                 if (!srs[ir].v[i1].is_range()) {
+                    ilast = srs[ir].v.size();
+                    for (size_t i2 = i1+1; i2 < ilast; ++i2) {
+                        if (l(i1) == l(i2) && r(i1) == r(i2)) {
+                            //std::cout << "=\n";
+                            addnext(i1, i2);
+                            rmlast(i2);
+                            --i2;
+                        }
+                    }
                     continue ;
                 }
                 ilast = srs[ir].v.size();
                 for (size_t i2 = i1+1; i2 < ilast; ++i2) {
-                    // [l1 r1]
-                    // [l2 r2]
-                    if (l(i1) == l(i2) && r(i1) == r(i2)) {
-                        //std::cout << "=\n";
-                        addnext(i1, i2);
-                        rmlast(i2);
-                        --i2;
-                        continue;
-                    }
-
                     if (!srs[ir].v[i2].is_range()
                     || (r(i1) < l(i2) && l(i1) < l(i2))
                     || (r(i2) < l(i1) && l(i2) < l(i1))) {
@@ -710,6 +734,14 @@ public:
                         //std::cout << "[1 [2 =\n";
                         r(i1) = l(i2) - 1;
                         addnext(i2, i1);
+                    }
+                    // [l1 r1]
+                    // [l2 r2]
+                    else if (l(i1) == l(i2) && r(i1) == r(i2)) {
+                        //std::cout << "=\n";
+                        addnext(i1, i2);
+                        rmlast(i2);
+                        --i2;
                     }
                     // [l1 r1][l2 r2]
                     else if (r(i2) == l(i1)){
@@ -868,26 +900,35 @@ public:
         this->nb_states = srs.size();
         this->init_srss<traits>(srs);
 
-        /*if (!this->yes_beg)*/ {
-//             const StateRangeSearch * sr = this->srss;
-//             next_search:
-//             while (sr) {
-//                 const NStateSearch * first = sr->v;
-//                 const NStateSearch * last = first + sr->sz;
-//                 for (; first != last; ++first) {
-//                     if (first->is_beginning() || first->is_terminate()) {
-//                         sr = first->sr;
-//                         if (sr->is_finish) {
-//                             this->yes_beg = true;
-//                             sr = nullptr;
-//                         }
-//                         goto next_search;
-//                     }
-//                 }
-//
-//                 this->yes_beg = false;
-//                 break;
-//             }
+        {
+            const StateRangeSearch * sr = this->srss;
+            while (sr) {
+                const NStateSearch * first = sr->v;
+                const NStateSearch * last = first + sr->sz;
+                bool bol = false;
+                bool eol = false;
+                for (; first != last && !(bol && eol); ++first) {
+                    if (first->is_beginning()) {
+                        bol = true;
+                        sr = first->sr;
+                        this->has_bol = true;
+                    }
+                    if (first->is_terminate()) {
+                        eol = true;
+                        sr = first->sr;
+                        this->has_eol = true;
+                    }
+                }
+
+                if (sr->is_finish || !(bol || eol)) {
+                    break;
+                }
+            }
+
+            if (!sr || !sr->is_finish) {
+                this->has_bol = false;
+                this->has_eol = false;
+            }
         }
 
         if (sr_beg && sr_first) {
@@ -904,8 +945,9 @@ public:
 
         if (g_trace_active) {
             std::cout <<
-                "yes_beg: " << (yes_beg) << "\n"
-                "yes_finish: " << (yes_finish) << "\n"
+                "has_bol: " << (has_bol) << "\n"
+                "has_eol: " << (has_eol) << "\n"
+                "is_finish: " << (is_finish) << "\n"
                 "-----------\n"
             ;
         }
@@ -916,8 +958,9 @@ public:
     , s_sr_beg(0)
     , s_sr_first(0)
     , nb_states(other.nb_states)
-    , yes_beg(other.yes_beg)
-    , yes_finish(other.yes_finish)
+    , has_bol(other.has_bol)
+    , has_eol(other.has_eol)
+    , is_finish(other.is_finish)
     {
         struct traits {
             typedef StateRangeSearch const * iterator_range;
@@ -954,15 +997,16 @@ public:
     , s_sr_beg(other.s_sr_beg)
     , s_sr_first(other.s_sr_first)
     , nb_states(other.nb_states)
-    , yes_beg(other.yes_beg)
-    , yes_finish(other.yes_finish)
+    , has_bol(other.has_bol)
+    , has_eol(other.has_eol)
+    , is_finish(other.is_finish)
     {
         other.srss = nullptr;
         other.s_sr_beg = nullptr;
         other.s_sr_first = nullptr;
         other.nb_states = 0;
-        other.yes_beg = 0;
-        other.yes_finish = 0;
+        other.has_bol = 0;
+        other.is_finish = 0;
     }
 #endif
 
