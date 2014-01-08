@@ -135,14 +135,14 @@ class StateMachine2
 
     struct StateRangeSearch
     {
-        NStateSearch * v;
+        NStateSearch const * v;
         size_t sz;
         bool is_finish;
-        unsigned step;
     };
 
-    struct NStateSearch {
-        StateRangeSearch * sr;
+    struct NStateSearch
+    {
+        StateRangeSearch const * sr;
         char_int l;
         char_int r;
 
@@ -286,7 +286,7 @@ class StateMachine2
 
         if (s_sr_beg->sz == 1 && s_sr_beg->v->is_terminate()) {
             if (yes_beg) {
-                RE_SHOW(std::cout << "is ^$");
+                RE_SHOW(std::cout << "is ^$\n");
                 return pre_cond_t(true, !*s);
             }
             else {
@@ -320,15 +320,15 @@ class StateMachine2
 
     template<bool> struct ExactMatch { };
 
-    bool exact_search_impl(const char * s, size_t * pos) const
+    bool exact_test_impl(const char * s, size_t * pos) const
     {
-        return exact_search_impl(s, ExactMatch<true>(), pos);
+        return exact_test_impl(s, ExactMatch<true>(), pos);
     }
 
     template<bool exact_match>
-    bool exact_search_impl(const char * s, ExactMatch<exact_match>, size_t * pos) const
+    bool exact_test_impl(const char * s, ExactMatch<exact_match>, size_t * pos) const
     {
-        //std::cout << "exact_search (exact = " << exact_match << ")\n";
+        //std::cout << "exact_test (exact = " << exact_match << ")\n";
         //std::cout << "sr_beg: " << s_sr_beg << ", sr_first: " << s_sr_first << "\n";
 
         if (pos) {
@@ -384,8 +384,8 @@ class StateMachine2
     {
         //std::cout << "search\n";
         if (!s_sr_first) {
-            RE_SHOW(std::cout << "call exact_search\n");
-            return exact_search_impl(s, ExactMatch<false>(), pos);
+            RE_SHOW(std::cout << "call exact_test\n");
+            return exact_test_impl(s, ExactMatch<false>(), pos);
         }
 
         if (pos) {
@@ -403,13 +403,10 @@ class StateMachine2
             return true;
         }
 
-        for (size_t i = 0; i < nb_states; ++i) {
-            srss[i].step = 0;
-        }
-
         unsigned step = 0;
-        std::vector<StateRangeSearch*> srs1(1, s_sr_beg) /*({s_sr_beg})*/;
-        std::vector<StateRangeSearch*> srs2;
+        std::vector<unsigned> steps(this->nb_states, 0);
+        std::vector<StateRangeSearch const *> srs1(1, s_sr_beg) /*({s_sr_beg})*/;
+        std::vector<StateRangeSearch const *> srs2;
         srs1.reserve(nb_states);
         srs2.reserve(nb_states);
 
@@ -426,11 +423,11 @@ class StateMachine2
             ++step;
             const char_int c = consumer.bumpc();
             RE_SHOW(std::cout << "\033[33m" << utf8_char(c) << "\033[0m\n");
-            for (StateRangeSearch * sr: srs1) {
-                if (sr->step == step) {
+            for (StateRangeSearch const * sr: srs1) {
+                if (steps[sr - this->srss] == step) {
                     continue ;
                 }
-                sr->step = step;
+                steps[sr - this->srss] = step;
                 for (size_t i = 0; i < sr->sz; ++i) {
                     const NStateSearch & nst = sr->v[i];
                     RE_SHOW(std::cout << "\t[" << utf8_char(nst.l) << "-" << utf8_char(nst.l) << "]\n");
@@ -452,7 +449,7 @@ class StateMachine2
 
         RE_SHOW(std::cout << "consumer.empty\n");
 
-        for (StateRangeSearch * sr: srs1) {
+        for (StateRangeSearch const * sr: srs1) {
             if (sr->v && !sr->is_finish) {
                 RE_SHOW(std::cout << "! st.v.empty" << std::endl);
                 for (size_t i = 0; i < sr->sz; ++i) {
@@ -469,6 +466,41 @@ class StateMachine2
         }
 
         return false;
+    }
+
+    template<typename Traits, typename C>
+    void init_srss(C & cont)
+    {
+        size_t count_nst = 0;
+        typedef typename Traits::iterator_range iterator_range;
+        iterator_range first = Traits::state_range_begin(cont);
+        iterator_range last = Traits::state_range_end(cont);
+        for (; first != last; ++first) {
+            count_nst += Traits::count_states(*first);
+        }
+
+        const size_t byte_srs = this->nb_states * sizeof(StateRangeSearch);
+        const size_t byte_st = count_nst * sizeof(NStateSearch);
+        const size_t byte_b = byte_srs + (byte_srs % sizeof(NStateSearch) ?  sizeof(NStateSearch) : 0);
+        this->srss = static_cast<StateRangeSearch*>(::operator new(byte_b + byte_st));
+        NStateSearch * pstss = reinterpret_cast<NStateSearch*>(reinterpret_cast<char*>(srss) + byte_b);
+        StateRangeSearch * csrss = srss;
+
+        for (first = Traits::state_range_begin(cont); first != last; ++first) {
+            csrss->v = Traits::count_states(*first) ? pstss : nullptr;
+            csrss->is_finish = first->is_finish;
+            csrss->sz = Traits::count_states(*first);
+            typedef typename Traits::iterator_state iterator_state;
+            iterator_state first2 = Traits::nstate_begin(*first);
+            iterator_state last2 = Traits::nstate_end(*first);
+            for (; first2 != last2; ++first2) {
+                pstss->l = first2->l;
+                pstss->r = first2->r;
+                pstss->sr = this->srss + (first2->sr - Traits::data(cont));
+                ++pstss;
+            }
+            ++csrss;
+        }
     }
 
     StateRangeSearch * srss;
@@ -530,7 +562,7 @@ public:
 
         //insert
         for (State * st: sts) {
-            if (st->is_range() || st->type == LAST/* || st->type == FIRST*/) {
+            if (st->is_range() || st->type == LAST || st->type == FIRST) {
                 srs.push_back({{st->num}, {}, false});
                 StateRange & sr = srs.back();
                 if (add_next_sts(sr.v, st->out1)) {
@@ -636,6 +668,16 @@ public:
                 }
                 ilast = srs[ir].v.size();
                 for (size_t i2 = i1+1; i2 < ilast; ++i2) {
+                    // [l1 r1]
+                    // [l2 r2]
+                    if (l(i1) == l(i2) && r(i1) == r(i2)) {
+                        //std::cout << "=\n";
+                        addnext(i1, i2);
+                        rmlast(i2);
+                        --i2;
+                        continue;
+                    }
+
                     if (!srs[ir].v[i2].is_range()
                     || (r(i1) < l(i2) && l(i1) < l(i2))
                     || (r(i2) < l(i1) && l(i2) < l(i1))) {
@@ -668,14 +710,6 @@ public:
                         //std::cout << "[1 [2 =\n";
                         r(i1) = l(i2) - 1;
                         addnext(i2, i1);
-                    }
-                    // [l1 r1]
-                    // [l2 r2]
-                    else if (l(i1) == l(i2) && r(i1) == r(i2)) {
-                        //std::cout << "=\n";
-                        addnext(i1, i2);
-                        rmlast(i2);
-                        --i2;
                     }
                     // [l1 r1][l2 r2]
                     else if (r(i2) == l(i1)){
@@ -778,21 +812,25 @@ public:
             display(srs);
         }
 
-        //TODO erase unused StateRange
-        {
-            srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) -> bool {
-                for (const StateRange & sr2: srs) {
-                    for (const NState & nst : sr2.v) {
-                        if (sr.stg == nst.nums) {
-                            return false;
+        // erase unused StateRange
+        /*if (minimal_memory)*/ {
+            size_t sz = srs.size();
+            do {
+                sz = srs.size();
+                srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) -> bool {
+                    for (const StateRange & sr2: srs) {
+                        for (const NState & nst : sr2.v) {
+                            if (sr.stg == nst.nums) {
+                                return false;
+                            }
                         }
                     }
-                }
-                return true;
-            }), srs.end());
+                    return true;
+                }), srs.end());
 
-            RE_SHOW(std::cout << "##erase\n--------\n");
-            display(srs);
+                RE_SHOW(std::cout << "##erase\n--------\n");
+                display(srs);
+            } while (sz != srs.size());
         }
 
         for (StateRange & sr: srs) {
@@ -803,41 +841,54 @@ public:
             }
         }
 
-        for (StateRange & sr: srs) {
-            for (NState & nst: sr.v) {
-                if (nst.is_terminate() && nullptr != nst.sr && 0 != nst.sr->v.size()) {
-                    nst.r = ~char_int(0) - 1;
-                    nst.l = ~char_int(0);
-                    nst.sr = &*srs.end();
-                }
-            }
-        }
+        struct traits {
+            typedef std::vector<StateRange> container_range_type;
+            typedef container_range_type::const_iterator iterator_range;
+            typedef std::vector<NState> container_state_type;
+            typedef container_state_type::const_iterator iterator_state;
 
-        {
-            size_t count_nst = 0;
-            for (StateRange& sr: srs) {
-                count_nst += sr.v.size();
-            }
-            const size_t byte_srs = srs.size() * sizeof(StateRangeSearch);
-            const size_t byte_st = count_nst * sizeof(NStateSearch);
-            const size_t byte_b = byte_srs + (byte_srs % sizeof(NStateSearch) ?  sizeof(NStateSearch) : 0);
-            srss = static_cast<StateRangeSearch*>(::operator new(byte_b + byte_st));
-            NStateSearch * pstss = reinterpret_cast<NStateSearch*>(reinterpret_cast<char*>(srss) + byte_b);
-            StateRangeSearch * csrss = srss;
-            for (StateRange& sr: srs) {
-                csrss->v = sr.v.empty() ? nullptr : pstss;
-                csrss->is_finish = sr.is_finish;
-                csrss->sz = sr.v.size();
-                for (NState& st: sr.v) {
-                    pstss->l = st.l;
-                    pstss->r = st.r;
-                    pstss->sr = srss + (st.sr - srs.data());
-                    ++pstss;
-                }
-                ++csrss;
-            }
+            static iterator_range state_range_begin(const std::vector<StateRange> & srs)
+            { return srs.begin(); }
+
+            static iterator_range state_range_end(const std::vector<StateRange> & srs)
+            { return srs.end(); }
+
+            static const StateRange * data(const std::vector<StateRange> & srs)
+            { return srs.data(); }
+
+            static iterator_state nstate_begin(const StateRange & sr)
+            { return sr.v.begin(); }
+
+            static iterator_state nstate_end(const StateRange & sr)
+            { return sr.v.end(); }
+
+            static size_t count_states(const StateRange & sr)
+            { return sr.v.size(); }
+        };
+        this->nb_states = srs.size();
+        this->init_srss<traits>(srs);
+
+        /*if (!this->yes_beg)*/ {
+//             const StateRangeSearch * sr = this->srss;
+//             next_search:
+//             while (sr) {
+//                 const NStateSearch * first = sr->v;
+//                 const NStateSearch * last = first + sr->sz;
+//                 for (; first != last; ++first) {
+//                     if (first->is_beginning() || first->is_terminate()) {
+//                         sr = first->sr;
+//                         if (sr->is_finish) {
+//                             this->yes_beg = true;
+//                             sr = nullptr;
+//                         }
+//                         goto next_search;
+//                     }
+//                 }
+//
+//                 this->yes_beg = false;
+//                 break;
+//             }
         }
-        nb_states = srs.size();
 
         if (sr_beg && sr_first) {
             s_sr_beg = srss + 0;
@@ -868,48 +919,44 @@ public:
     , yes_beg(other.yes_beg)
     , yes_finish(other.yes_finish)
     {
-        size_t count_nst = 0;
-        StateRangeSearch * first = other.srss;
-        StateRangeSearch * last = first + this->nb_states;
-        for (; first != last; ++first) {
-            count_nst += first->sz;
-        }
+        struct traits {
+            typedef StateRangeSearch const * iterator_range;
+            typedef NStateSearch const * iterator_state;
 
-        const size_t byte_srs = this->nb_states * sizeof(StateRangeSearch);
-        const size_t byte_st = count_nst * sizeof(NStateSearch);
-        const size_t byte_b = byte_srs + (byte_srs % sizeof(NStateSearch) ?  sizeof(NStateSearch) : 0);
-        this->srss = static_cast<StateRangeSearch*>(::operator new(byte_b + byte_st));
-        NStateSearch * pstss = reinterpret_cast<NStateSearch*>(reinterpret_cast<char*>(srss) + byte_b);
-        StateRangeSearch * csrss = srss;
+            static iterator_range state_range_begin(const StateMachine2 & sm)
+            { return sm.srss; }
 
-        first = other.srss;
-        last = first + this->nb_states;
-        for (; first != last; ++first) {
-            StateRangeSearch & sr = *first;
-            csrss->v = sr.sz ? pstss : nullptr;
-            csrss->is_finish = sr.is_finish;
-            csrss->sz = sr.sz;
-            NStateSearch * first2 = sr.v;
-            NStateSearch * last2 = sr.v + sr.sz;
-            for (; first2 != last2; ++first2) {
-                pstss->l = first2->l;
-                pstss->r = first2->r;
-                pstss->sr = srss + (first2->sr - other.srss);
-                ++pstss;
-            }
-            ++csrss;
-        }
+            static iterator_range state_range_end(const StateMachine2 & sm)
+            { return sm.srss + sm.nb_states; }
+
+            static StateRangeSearch const * data(const StateMachine2 & sm)
+            { return sm.srss; }
+
+            static iterator_state nstate_begin(const StateRangeSearch & sr)
+            { return sr.v; }
+
+            static iterator_state nstate_end(const StateRangeSearch & sr)
+            { return sr.v + sr.sz; }
+
+            static size_t count_states(const StateRangeSearch & sr)
+            { return sr.sz; }
+        };
+
+        this->init_srss<traits>(other);
+
+        this->s_sr_beg = this->srss + (other.srss - other.s_sr_beg);
+        this->s_sr_first = this->srss + (other.srss - other.s_sr_first);
     }
 
 #if __cplusplus >= 201103L && __cplusplus != 1 || defined(__GXX_EXPERIMENTAL_CXX0X__)
     StateMachine2(StateMachine2 && other) noexcept
+    : srss(other.srss)
+    , s_sr_beg(other.s_sr_beg)
+    , s_sr_first(other.s_sr_first)
+    , nb_states(other.nb_states)
+    , yes_beg(other.yes_beg)
+    , yes_finish(other.yes_finish)
     {
-        this->srss = other.srss;
-        this->s_sr_beg = other.s_sr_beg;
-        this->s_sr_first = other.s_sr_first;
-        this->nb_states = other.nb_states;
-        this->yes_beg = other.yes_beg;
-        this->yes_finish = other.yes_finish;
         other.srss = nullptr;
         other.s_sr_beg = nullptr;
         other.s_sr_first = nullptr;
@@ -921,66 +968,40 @@ public:
 
     ~StateMachine2()
     {
-        ::operator delete(srss);
+        ::operator delete(this->srss);
     }
 
-    unsigned mark_count() const
+    bool exact_test(const char * s, size_t * pos = 0) const
     {
-        return 0;
+        return this->exact_test_impl(s, pos);
     }
 
-public:
-    typedef std::pair<const char *, const char *> range_t;
-    typedef std::vector<range_t> range_matches;
-
-    struct DefaultMatchTracer
-    {
-        bool operator()(unsigned /*idx*/, const char *) const
-        { return true; }
-    };
-
-public:
-    bool exact_search(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
-    {
-        return this->exact_search_impl(s, pos);
-    }
-
-    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
-    {
-        return exact_search_impl(s, pos);
-    }
-
-    template<typename Tracer>
-    bool exact_search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * pos = 0)
-    {
-        return exact_search_impl(s, pos);
-    }
-
-    bool search(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
+    bool test(const char * s, size_t * pos = 0) const
     {
         return this->search_impl(s, pos);
     }
 
-    bool search_with_trace(const char * s, unsigned /*step_limit*/, size_t * pos = 0)
+    size_t count_states() const
     {
-        return search_impl(s, pos);
+        return this->nb_states;
     }
 
-    template<typename Tracer>
-    bool search_with_trace(const char * s, unsigned /*step_limit*/, Tracer /*tracer*/, size_t * pos = 0)
+    const StateRangeSearch * state() const
     {
-        return search_impl(s, pos);
+        return this->srss;
     }
 
-    range_matches match_result(bool /*all*/ = true) const
+    const StateRangeSearch * begin() const
     {
-        return range_matches();
+        return this->srss;
     }
 
-    void append_match_result(range_matches& /*ranges*/, bool /*all*/ = true) const
+    const StateRangeSearch * end() const
     {
+        return this->srss + this->nb_states;
     }
 };
+
 }
 
 #endif

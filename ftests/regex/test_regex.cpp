@@ -56,8 +56,6 @@ regex_test(p_regex, p_str, p_exact_result_search, p_result_search)
 
 void test_re(re::Regex::flag_t flags)
 {
-    typedef re::StateMachine2::range_t range_t;
-
     const char * str_regex = "a";
     Regex regex(str_regex, flags);
     if (regex.message_error()) {
