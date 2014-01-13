@@ -92,7 +92,7 @@ class StateMachine2
     class StateRange;
 
     struct NState {
-        std::vector<std::vector<uint>> nums;
+        std::vector<std::vector<uint> > nums;
         std::vector<StateRange *> srs;
         char_int l;
         char_int r;
@@ -137,6 +137,8 @@ public:
 
     struct StateRangeSearch
     {
+        unsigned const * caps;
+        unsigned const * caps_end;
         NStateSearch const * v;
         size_t sz;
         bool is_finish;
@@ -144,7 +146,8 @@ public:
 
     struct NStateSearch
     {
-        StateRangeSearch const * sr;
+        StateRangeSearch const * const * srs;
+        StateRangeSearch const * const * srs_end;
         char_int l;
         char_int r;
 
@@ -186,10 +189,10 @@ private:
                 }
 
                 else if (st->is_range()) {
-                  sr.v[0].push_back({{{st->num}}, {}, st->l, st->r});
+                  sr.v.push_back({{{st->num}}, {}, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                  sr.v[0].push_back({{{st->num}}, {}, 1, 0});
+                  sr.v.push_back({{{st->num}}, {}, 1, 0});
                 }
                 else {
                     return run(sr, st->out1, true);
@@ -199,12 +202,7 @@ private:
             }
         };
 
-        sr.v.resize(1);
-        bool ret = Impl::run(sr, st, false);
-        if (sr.v[0].empty()) {
-          sr.v.clear();
-        }
-        return ret;
+        return Impl::run(sr, st, false);
     }
 
   static bool add_first(StateRange & sr, const State * st)
@@ -226,13 +224,13 @@ private:
                 }
 
                 if (st->is_range()) {
-                    sr.v[0].push_back({{{st->num}}, {}, st->l, st->r});
+                    sr.v.push_back({{{st->num}}, {}, st->l, st->r});
                 }
                 else if (st->type == FIRST) {
                     return false;
                 }
                 else if (st->type == LAST) {
-                  sr.v[0].push_back({{{st->num}}, {}, 1, 0});
+                  sr.v.push_back({{{st->num}}, {}, 1, 0});
                 }
                 else {
                     return run(sr, st->out1);
@@ -242,12 +240,7 @@ private:
             }
         };
 
-        sr.v.resize(1);
-        bool ret = Impl::run(sr, st);
-        if (sr.v[0].empty()) {
-          sr.v.pop_back();
-        }
-        return ret;
+        return Impl::run(sr, st);
     }
 
   static bool add_next_sts(StateRange & sr, const State * st)
@@ -269,13 +262,13 @@ private:
                 }
 
                 if (st->is_range()) {
-                    sr.v.back.push_back({{{st->num}}, {}, st->l, st->r});
+                    sr.v.push_back({{{st->num}}, {}, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    sr.v[0].push_back({{{st->num}}, {}, 1, 0});
+                    sr.v.push_back({{{st->num}}, {}, 1, 0});
                 }
                 else if (st->type == FIRST) {
-                    sr.v[0].push_back({{{st->num}}, {}, 2, 0});
+                    sr.v.push_back({{{st->num}}, {}, 2, 0});
                     //return run(v, st->out1);
                 }
                 else {
@@ -286,44 +279,61 @@ private:
             }
         };
 
-        sr.v.resize(1);
-        bool ret = Impl::run(sr, st);
-        if (sr.v[0].empty()) {
-          sr.v.pop_back();
-        }
-        return ret;
+        return Impl::run(sr, st);
     }
 
     template<typename Traits, typename C>
     void init_srss(C & cont)
     {
         size_t count_nst = 0;
+        size_t count_caps = 0;
+        size_t count_sr = 0;
         typedef typename Traits::iterator_range iterator_range;
         iterator_range first = Traits::state_range_begin(cont);
         iterator_range last = Traits::state_range_end(cont);
         for (; first != last; ++first) {
             count_nst += Traits::count_states(*first);
+            count_caps += Traits::count_caps(*first);
+            count_sr += Traits::count_sr(*first);
         }
 
         const size_t byte_srs = this->nb_states * sizeof(StateRangeSearch);
         const size_t byte_st = count_nst * sizeof(NStateSearch);
-        const size_t byte_b = byte_srs + (byte_srs % sizeof(NStateSearch) ?  sizeof(NStateSearch) : 0);
-        this->srss = static_cast<StateRangeSearch*>(::operator new(byte_b + byte_st));
-        NStateSearch * pstss = reinterpret_cast<NStateSearch*>(reinterpret_cast<char*>(srss) + byte_b);
+        const size_t byte_sr = count_sr * sizeof(StateRangeSearch*);
+        const size_t byte_caps = count_caps * sizeof(unsigned);
+        const size_t mem_srs = byte_srs + (byte_srs % sizeof(NStateSearch) ? sizeof(NStateSearch) : 0);
+        const size_t mem_st = byte_st + (byte_st % sizeof(StateRangeSearch*) ? sizeof(StateRangeSearch*) : 0);
+        const size_t mem_sr = byte_sr + (byte_sr % sizeof(unsigned) ? sizeof(unsigned) : 0);
+        char * data = static_cast<char*>(::operator new(mem_srs + mem_st + mem_sr + byte_caps));
+        this->srss = reinterpret_cast<StateRangeSearch*>(data);
+        NStateSearch * pstss = reinterpret_cast<NStateSearch*>(data + mem_srs);
+        StateRangeSearch const* * psrss = reinterpret_cast<StateRangeSearch const**>(data + mem_srs + mem_st);
+        unsigned * pcaps = reinterpret_cast<unsigned*>(data + mem_srs + mem_st + mem_sr);
         StateRangeSearch * csrss = srss;
 
         for (first = Traits::state_range_begin(cont); first != last; ++first) {
-            csrss->v = Traits::count_states(*first) ? pstss : nullptr;
+            csrss->v = pstss;
             csrss->is_finish = first->is_finish;
             csrss->sz = Traits::count_states(*first);
+
+            unsigned * last_caps = std::copy(Traits::caps_begin(*first), Traits::caps_end(*first), pcaps);
+            csrss->caps = pcaps;
+            csrss->caps_end = last_caps;
+            pcaps = last_caps;
+
             typedef typename Traits::iterator_state iterator_state;
             iterator_state first2 = Traits::nstate_begin(*first);
             iterator_state last2 = Traits::nstate_end(*first);
-            for (; first2 != last2; ++first2) {
+            for (; first2 != last2; ++first2, ++pstss) {
                 pstss->l = first2->l;
                 pstss->r = first2->r;
-                pstss->sr = this->srss + (first2->sr - Traits::data(cont));
-                ++pstss;
+                pstss->srs = psrss;
+                auto sr_first = Traits::sr_begin(*first2);
+                auto sr_last = Traits::sr_end(*first2);
+                for(; sr_first != sr_last; ++sr_first, ++psrss) {
+                    *psrss = this->srss + (*sr_first - Traits::data(cont));
+                }
+                pstss->srs_end = psrss;
             }
             ++csrss;
         }
@@ -399,7 +409,7 @@ public:
 
         if (!srs.empty()) {
             for (std::size_t i = srs.size(); i-- > 1;) {
-                StateRange const & csr = srs[i];
+                StateRange & csr = srs[i];
                 auto it = std::find_if(srs.begin(), srs.begin()+i, SameRange{csr});
                 if (it != srs.begin()+i) {
                     const unsigned new_id = it->stg[0];
@@ -407,14 +417,21 @@ public:
                     RE_SHOW(std::cout << "old_id: " << old_id << "\tnew_id: " << new_id << std::endl);
                     for (StateRange & sr: srs) {
                         for (NState & nst: sr.v) {
-                            if (nst.nums[0] == old_id) {
-                                nst.nums[0] = new_id;
+                            if (nst.nums[0][0] == old_id) {
+                                nst.nums[0][0] = new_id;
                             }
                         }
                     }
                     srs.erase(srs.begin()+i);
                 }
+                else {
+                    std::sort(csr.caps.begin(), csr.caps.end());
+                    csr.caps.erase(std::unique(csr.caps.begin(), csr.caps.end()), csr.caps.end());
+                }
             }
+            StateRange & csr = srs.front();
+            std::sort(csr.caps.begin(), csr.caps.end());
+            csr.caps.erase(std::unique(csr.caps.begin(), csr.caps.end()), csr.caps.end());
         }
 
         struct Display {
@@ -454,8 +471,11 @@ public:
                                 std::cout << "(finish)\033[0m\t";
                             }
 
-                            for (uint id: st.nums) {
-                                std::cout << id << ", ";
+                            for (auto & nums: st.nums) {
+                                std::cout << "\n\t\t";
+                                for (uint id: nums) {
+                                    std::cout << id << ", ";
+                                }
                             }
                             std::cout << "\n";
                         }
@@ -486,7 +506,7 @@ public:
                 srs[ir].v.pop_back();
             };
             auto addnext = [&srs, ir](size_t i, size_t i2) {
-                typedef std::vector<std::vector<unsigned>> nums_container;
+                typedef std::vector<std::vector<unsigned> > nums_container;
                 nums_container & v1 = srs[ir].v[i].nums;
                 nums_container & v2 = srs[ir].v[i2].nums;
 
@@ -711,6 +731,8 @@ public:
             typedef container_range_type::const_iterator iterator_range;
             typedef std::vector<NState> container_state_type;
             typedef container_state_type::const_iterator iterator_state;
+            typedef std::vector<StateRange*> container_linked_type;
+            typedef container_linked_type::const_iterator iterator_linked;
 
             static iterator_range state_range_begin(const std::vector<StateRange> & srs)
             { return srs.begin(); }
@@ -727,38 +749,75 @@ public:
             static iterator_state nstate_end(const StateRange & sr)
             { return sr.v.end(); }
 
+            static std::vector<unsigned>::const_iterator caps_begin(const StateRange & sr)
+            { return sr.caps.begin(); }
+
+            static std::vector<unsigned>::const_iterator caps_end(const StateRange & sr)
+            { return sr.caps.end(); }
+
+            static iterator_linked sr_begin(const NState & nst)
+            { return nst.srs.begin(); }
+
+            static iterator_linked sr_end(const NState & nst)
+            { return nst.srs.end(); }
+
             static size_t count_states(const StateRange & sr)
             { return sr.v.size(); }
+
+            static size_t count_caps(const StateRange & sr)
+            { return sr.caps.size(); }
+
+            static size_t count_sr(const StateRange & sr)
+            {
+                size_t ret = 0;
+                for (NState const & nst: sr.v) {
+                    ret += nst.srs.size();
+                }
+                return ret;
+            }
         };
         this->nb_states = srs.size();
         this->init_srss<traits>(srs);
 
         {
-            const StateRangeSearch * sr = this->srss;
-            while (sr) {
-                const NStateSearch * first = sr->v;
-                const NStateSearch * last = first + sr->sz;
-                bool bol = false;
-                bool eol = false;
-                for (; first != last && !(bol && eol); ++first) {
-                    if (first->is_beginning()) {
-                        bol = true;
-                        sr = first->sr;
-                        this->has_bol = true;
+            std::vector<const StateRangeSearch *> srss(1, this->srss);
+            std::vector<const StateRangeSearch *> srss2;
+            while (!srss.empty()) {
+                bool terminate = false;
+                for (const StateRangeSearch * sr : srss) {
+                    const NStateSearch * first = sr->v;
+                    const NStateSearch * last = first + sr->sz;
+                    bool bol = false;
+                    bool eol = false;
+                    for (; first != last && !(bol && eol); ++first) {
+                        if (first->is_beginning()) {
+                            bol = true;
+                            srss2.insert(srss2.end(), first->srs, first->srs_end);
+                            this->has_bol = true;
+                        }
+                        if (first->is_terminate()) {
+                            eol = true;
+                            srss2.insert(srss2.end(), first->srs, first->srs_end);
+                            this->has_eol = true;
+                        }
                     }
-                    if (first->is_terminate()) {
-                        eol = true;
-                        sr = first->sr;
-                        this->has_eol = true;
+
+                    if (!(bol || eol) || std::find_if(srss2.begin(), srss.end(), [](const StateRangeSearch * sr){
+                        return sr->is_finish;
+                    }) != srss.end()) {
+                        terminate = true;
+                        break;
                     }
                 }
-
-                if (sr->is_finish || !(bol || eol)) {
+                if (terminate) {
                     break;
                 }
+                swap(srss, srss2);
             }
 
-            if (!sr || !sr->is_finish) {
+            if (srss.empty()/* || std::find_if_not(srss.begin(), srss.end(), [](const StateRangeSearch * sr){
+                return sr->is_finish;
+            }) == srss.end()*/) {
                 this->has_bol = false;
                 this->has_eol = false;
             }
@@ -796,6 +855,7 @@ public:
         struct traits {
             typedef StateRangeSearch const * iterator_range;
             typedef NStateSearch const * iterator_state;
+            typedef StateRangeSearch const * const * iterator_linked;
 
             static iterator_range state_range_begin(const StateMachine2 & sm)
             { return sm.srss; }
@@ -812,8 +872,32 @@ public:
             static iterator_state nstate_end(const StateRangeSearch & sr)
             { return sr.v + sr.sz; }
 
+            static unsigned const * caps_begin(const StateRangeSearch & sr)
+            { return sr.caps; }
+
+            static unsigned const * caps_end(const StateRangeSearch & sr)
+            { return sr.caps_end; }
+
+            static iterator_linked sr_begin(const NStateSearch & nst)
+            { return nst.srs; }
+
+            static iterator_linked sr_end(const NStateSearch & nst)
+            { return nst.srs_end; }
+
             static size_t count_states(const StateRangeSearch & sr)
             { return sr.sz; }
+
+            static size_t count_caps(const StateRangeSearch & sr)
+            { return sr.caps_end - sr.caps; }
+
+            static size_t count_sr(const StateRangeSearch & sr)
+            {
+                size_t ret = 0;
+                for (NStateSearch const * first = sr.v, * last = sr.v + sr.sz; first != last; ++first) {
+                    ret += first->srs_end - first->srs;
+                }
+                return ret;
+            }
         };
 
         this->init_srss<traits>(other);
@@ -873,6 +957,7 @@ enum result_test_type { test_fail, test_ok, test_run, test_unknow };
 
 namespace detail {
     typedef StateMachine2::StateRangeSearch StateRange;
+    typedef StateMachine2::NStateSearch State;
 
     inline result_test_type test_start(const StateMachine2 & sm, const char * s)
     {
@@ -914,90 +999,131 @@ namespace detail {
         return test_run;
     }
 
-    inline bool is_valid_state_range(const StateRange * sr)
+    template<typename T>
+    struct RangePtr {
+        T * first;
+        T * second;
+
+        T * begin() const
+        { return this->first; }
+
+        T * end() const
+        { return this->second; }
+    };
+
+    inline bool is_valid_state_range(const StateRange* data,
+                                     std::vector<RangePtr<StateRange const * const> > & rsrs1,
+                                     std::vector<RangePtr<StateRange const * const> > & rsrs2,
+                                     std::vector<unsigned> & steps,
+                                     unsigned step)
     {
-        RE_SHOW(std::cout << "! st.v.empty" << std::endl);
-        next_search:
-        while (sr) {
-            for (size_t i = 0; i < sr->sz; ++i) {
-                if (sr->v[i].is_terminate()) {
-                    RE_SHOW(std::cout << "is_terminate" << std::endl);
-                    sr = sr->v[i].sr;
-                    if (sr->is_finish) {
+        while (!rsrs1.empty()) {
+            for (auto rsrs: rsrs1) {
+                for (auto sr: rsrs) {
+                    if (steps[sr - data] == step) {
+                        continue ;
+                    }
+                    steps[sr - data] = step;
+                    if (!sr->v || sr->is_finish) {
+                        RE_SHOW(std::cout << "finish" << std::endl);
                         return true;
                     }
-                    goto next_search;
+                    for (State const & st: RangePtr<State const>{sr->v, sr->v+sr->sz}) {
+                        if (st.is_terminate()) {
+                            RE_SHOW(std::cout << "is_terminate" << std::endl);
+                            rsrs2.push_back({st.srs, st.srs_end});
+                            break;
+                        }
+                    }
                 }
             }
-            break ;
+            swap(rsrs1, rsrs2);
         }
+
         return false;
     }
 
-    template<bool exact_match>
-    inline result_test_type exact_test_impl(const StateRange * & sr, utf8_consumer & consumer)
+    template<bool exact_match, bool search>
+    inline result_test_type exact_test_impl(const StateRange * data,
+                                            const StateRange * const * sr_first,
+                                            std::vector<RangePtr<StateRange const * const> > & rsrs1,
+                                            std::vector<RangePtr<StateRange const * const> > & rsrs2,
+                                            std::vector<std::pair<unsigned, unsigned> > & caps,
+                                            std::vector<unsigned> steps,
+                                            unsigned & step,
+                                            utf8_consumer & consumer)
     {
-        next_char:
         while (consumer.valid()) {
-            if (!sr->v) {
-                RE_SHOW(std::cout << "sr->v = nullptr\n");
-                return !exact_match ? test_ok : test_fail;
-            }
             const char_int c = consumer.bumpc();
             RE_SHOW(std::cout << "\033[33m" << utf8_char(c) << "\033[0m\n");
-            for (size_t i = 0; i < sr->sz; ++i) {
-                const StateMachine2::NStateSearch & nst = sr->v[i];
-                RE_SHOW(std::cout << "\t[" << utf8_char(nst.l) << "-" << utf8_char(nst.l) << "]\n");
-                if (nst.l <= c && c <= nst.r) {
-                    RE_SHOW(std::cout << "\t\tok\n");
-                    sr = nst.sr;
-                    goto next_char;
+            for (auto rsrs: rsrs1) {
+                //RE_SHOW(std::cout << "rsrs\n");
+                for (const StateRange * sr: rsrs) {
+                    //RE_SHOW(std::cout << "sr\n");
+                    if (steps[sr - data] == step) {
+                        //RE_SHOW(std::cout << "continue\n");
+                        continue ;
+                    }
+                    steps[sr - data] = step;
+                    if (!exact_match && (!sr->v || sr->is_finish)) {
+                        RE_SHOW(std::cout << "finish" << std::endl);
+                        return test_ok;
+                    }
+                    for (State const & nst: RangePtr<State const>{sr->v, sr->v+sr->sz}) {
+                        RE_SHOW(std::cout << "\t[" << utf8_char(nst.l) << "-" << utf8_char(nst.l) << "]\n");
+                        if (nst.l <= c && c <= nst.r) {
+                            RE_SHOW(std::cout << "\t\tok\n");
+                            if (nst.srs == nst.srs_end) {
+                                RE_SHOW(std::cout << "sr->v = nullptr\n");
+                                if (!exact_match) {
+                                    return test_ok;
+                                }
+                            }
+                            else {
+                                rsrs2.push_back({nst.srs, nst.srs_end});
+                            }
+                            break;
+                        }
+                    }
                 }
             }
-            RE_SHOW(std::cout << "none\n");
-            return test_fail;
+
+            ++step;
+
+            if (search) {
+                rsrs2.push_back({sr_first, sr_first+1});
+            }
+            else if (rsrs2.empty()) {
+                RE_SHOW(std::cout << "none\n");
+                return test_fail;
+            }
+            swap(rsrs1, rsrs2);
+            rsrs2.clear();
         }
 
         return test_run;
     }
 
-    inline result_test_type search_impl(const StateRange * data,
-                                 const StateRange * sr_first,
-                                 std::vector<StateRange const *> & srs1,
-                                 std::vector<StateRange const *> & srs2,
-                                 std::vector<unsigned> & steps,
-                                 unsigned & step,
-                                 utf8_consumer & consumer)
+    template<bool exact_match>
+    inline result_test_type exact_test_impl(const StateRange * data,
+                                            std::vector<RangePtr<StateRange const * const> > & rsrs1,
+                                            std::vector<RangePtr<StateRange const * const> > & rsrs2,
+                                            std::vector<unsigned> steps,
+                                            unsigned & step,
+                                            utf8_consumer & consumer)
     {
-        while (consumer.valid()) {
-            ++step;
-            const char_int c = consumer.bumpc();
-            RE_SHOW(std::cout << "\033[33m" << utf8_char(c) << "\033[0m\n");
-            for (StateRange const * sr: srs1) {
-                if (steps[sr - data] == step) {
-                    continue ;
-                }
-                steps[sr - data] = step;
-                for (size_t i = 0; i < sr->sz; ++i) {
-                    const StateMachine2::NStateSearch & nst = sr->v[i];
-                    RE_SHOW(std::cout << "\t[" << utf8_char(nst.l) << "-" << utf8_char(nst.l) << "]\n");
-                    if (nst.l <= c && c <= nst.r) {
-                        RE_SHOW(std::cout << "\t\tok\n");
-                        srs2.push_back(nst.sr);
-                        if (!nst.sr->v || nst.sr->is_finish) {
-                            RE_SHOW(std::cout << ("finish") << std::endl);
-                            return test_ok;
-                        }
-                        break;
-                    }
-                }
-            }
-            swap(srs1, srs2);
-            srs1.push_back(sr_first);
-            srs2.clear();
-        }
+        return exact_test_impl<exact_match, false>(data, nullptr, rsrs1, rsrs2, steps, step, consumer);
+    }
 
-        return test_run;
+    inline result_test_type search_impl(const StateRange * data,
+                                        const StateRange * const * sr_first,
+                                        std::vector<RangePtr<StateRange const * const> > & rsrs1,
+                                        std::vector<RangePtr<StateRange const * const> > & rsrs2,
+                                        std::vector<unsigned> steps,
+                                        unsigned & step,
+                                        utf8_consumer & consumer)
+    {
+        return exact_test_impl<false, true>(data, sr_first, rsrs1, rsrs2, steps, step, consumer);
     }
 }
 
@@ -1005,12 +1131,18 @@ namespace detail {
 template<bool exact_match>
 class BasicExactTest
 {
-    detail::StateRange const * sr;
+    detail::StateRange const * data;
+    detail::StateRange const * sr_beg;
+    unsigned step;
+    std::vector<unsigned> steps;
+    std::vector<detail::RangePtr<detail::StateRange const * const> > srs1;
+    std::vector<detail::RangePtr<detail::StateRange const * const> > srs2;
     utf8_consumer consumer;
 
 public:
     BasicExactTest()
-    : sr(0)
+    : data(nullptr)
+    , step(0)
     , consumer(nullptr)
     {}
 
@@ -1019,9 +1151,15 @@ public:
         if (pos) {
             *pos = 0;
         }
-        this->sr = sm.sr_beg();
         result_test_type ret = detail::test_start(sm, s);
         if (ret == test_run) {
+            this->data = sm.state();
+            this->srs1.clear();
+            this->srs1.reserve(sm.count_states());
+            this->sr_beg = sm.sr_beg();
+            this->srs1.push_back({&this->sr_beg, &this->sr_beg+1});
+            this->step = 1;
+            this->steps.resize(sm.count_states(), 0);
             return this->next(s, pos);
         }
         return ret;
@@ -1030,7 +1168,12 @@ public:
     result_test_type next(const char * s, size_t * pos = 0)
     {
         this->consumer.str(s);
-        result_test_type ret = detail::exact_test_impl<exact_match>(this->sr, this->consumer);
+        result_test_type ret = detail::exact_test_impl<exact_match>(this->data,
+                                                                    this->srs1,
+                                                                    this->srs2,
+                                                                    this->steps,
+                                                                    this->step,
+                                                                    this->consumer);
         if (pos) {
             *pos = this->consumer.str() - s;
         }
@@ -1039,12 +1182,7 @@ public:
 
     bool stop()
     {
-        if (sr->v && !sr->is_finish) {
-            if (detail::is_valid_state_range(sr)) {
-                return true;
-            }
-        }
-        return !sr->v || sr->is_finish;
+        return detail::is_valid_state_range(this->data, this->srs1, this->srs2, this->steps, this->step);
     }
 };
 
@@ -1054,12 +1192,13 @@ typedef BasicExactTest<true> ExactTest;
 class SearchTest
 {
     detail::StateRange const * data;
+    detail::StateRange const * sr_beg;
     detail::StateRange const * sr_first;
     utf8_consumer consumer;
     unsigned step;
     std::vector<unsigned> steps;
-    std::vector<detail::StateRange const *> srs1;
-    std::vector<detail::StateRange const *> srs2;
+    std::vector<detail::RangePtr<detail::StateRange const * const> > srs1;
+    std::vector<detail::RangePtr<detail::StateRange const * const> > srs2;
 
 public:
     SearchTest()
@@ -1072,10 +1211,6 @@ public:
         if (pos) {
             *pos = 0;
         }
-
-        this->srs1.clear();
-        this->srs1.reserve(sm.count_states());
-        this->srs1.push_back(sm.sr_beg());
         result_test_type ret = detail::test_start(sm, s);
 
         if (ret == test_run)
@@ -1089,9 +1224,13 @@ public:
                 return test_ok;
             }
 
+            this->srs1.clear();
+            this->srs1.reserve(sm.count_states());
+            this->sr_beg = sm.sr_beg();
+            this->srs1.push_back({&this->sr_beg, &this->sr_beg+1});
             this->data = sm.state();
             this->sr_first = sm.sr_first();
-            this->step = 0;
+            this->step = 1;
             this->srs2.clear();
             this->srs2.reserve(sm.count_states());
             this->steps.resize(sm.count_states(), 0);
@@ -1104,7 +1243,7 @@ public:
     {
         this->consumer.str(s);
         result_test_type ret = detail::search_impl(this->data,
-                                                   this->sr_first,
+                                                   &this->sr_first,
                                                    this->srs1,
                                                    this->srs2,
                                                    this->steps,
@@ -1118,19 +1257,7 @@ public:
 
     bool stop()
     {
-        for (detail::StateRange const * sr: this->srs1) {
-            if (sr->v && !sr->is_finish) {
-                if (detail::is_valid_state_range(sr)) {
-                    return true;
-                }
-            }
-            else {
-                RE_SHOW(std::cout << "st.v.empty" << std::endl);
-                return true;
-            }
-        }
-
-        return false;
+        return detail::is_valid_state_range(this->data, this->srs1, this->srs2, this->steps, this->step);
     }
 };
 
