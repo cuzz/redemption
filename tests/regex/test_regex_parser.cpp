@@ -31,18 +31,17 @@
 #define LOGNULL
 
 #include "regex_parser.hpp"
-#include "regex_states_value.hpp"
 
 using namespace re;
 
-inline void st_to_string(const state_list_t & states, StatesValue & stval, const State * st,
+inline void st_to_string(const state_list_t & states, std::vector<unsigned> & stval, const State * st,
                          std::ostream& os, unsigned depth = 0)
 {
     size_t n = std::find(states.begin(), states.end(), st) - states.begin() + 1;
     os << std::string(depth, '\t') << n;
-    if (st && stval.get_num_at(st) != -30u) {
+    if (st && stval[st->num] != -30u) {
         os << "\t" << *st << "\n";
-        stval.set_num_at(st, -30u);
+        stval[st->num] = -30u;
         st_to_string(states, stval, st->out1, os, depth+1);
         st_to_string(states, stval, st->out2, os, depth+1);
     }
@@ -62,8 +61,8 @@ inline std::string st_to_string(State * st)
     for (unsigned i = 0; i < states.size(); ++i) {
         states[i]->num = i;
     }
-    StatesValue stval(states);
-    st_to_string(states, stval, st, os);
+    std::vector<unsigned> nums(states.size(), 0);
+    st_to_string(states, nums, st, os);
     return os.str();
 }
 
@@ -78,7 +77,7 @@ BOOST_AUTO_TEST_CASE(TestRegexState)
         Reg(const char * s)
         {
             this->stparser.compile(s);
-            ///\ATTENTION not save
+            ///\ATTENTION reindex State::num
             this->str = st_to_string(const_cast<State*>(this->stparser.root()));
         }
 
