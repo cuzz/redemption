@@ -87,21 +87,33 @@ OutputIt unique_merge(InputIt first1, InputIt last1,
 }
 
 
+// TODO rename to deterministic finite automaton ?
 class StateMachine2
 {
     class StateRange;
 
     struct NState {
-        std::vector<uint> nums;
+        unsigned id_nums;
         StateRange * sr;
         char_int l;
         char_int r;
 
         bool operator==(NState const other) const
         {
-            return other.nums == this->nums
+            return other.id_nums == this->id_nums
                 && other.l == this->l
                 && other.r == this->r;
+        }
+
+        bool operator<(NState const other) const
+        {
+          if (this->l != other.l) {
+            return this->l < other.l;
+          }
+          if (this->r != other.r) {
+            return this->r < other.r;
+          }
+          return this->id_nums < other.id_nums;
         }
 
         bool is_range() const
@@ -116,7 +128,7 @@ class StateMachine2
 
     struct StateRange
     {
-        std::vector<unsigned> stg;
+        unsigned id_nums;
         std::vector<NState> v;
         bool is_finish;
     };
@@ -180,10 +192,10 @@ private:
                 }
 
                 else if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
+                    v.push_back({st->num, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({st->num, nullptr, 1, 0});
                 }
                 else {
                     return run(v, st->out1, true);
@@ -210,13 +222,13 @@ private:
                 }
 
                 if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
+                    v.push_back({st->num, nullptr, st->l, st->r});
                 }
                 else if (st->type == FIRST) {
                     return false;
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({st->num, nullptr, 1, 0});
                 }
                 else {
                     return run(v, st->out1);
@@ -243,13 +255,13 @@ private:
                 }
 
                 if (st->is_range()) {
-                    v.push_back({{st->num}, nullptr, st->l, st->r});
+                    v.push_back({st->num, nullptr, st->l, st->r});
                 }
                 else if (st->type == LAST) {
-                    v.push_back({{st->num}, nullptr, 1, 0});
+                    v.push_back({st->num, nullptr, 1, 0});
                 }
                 else if (st->type == FIRST) {
-                    v.push_back({{st->num}, nullptr, 2, 0});
+                    v.push_back({st->num, nullptr, 2, 0});
                     //return run(v, st->out1);
                 }
                 else {
@@ -320,11 +332,14 @@ public:
             return ;
         }
 
+        // ligne (max): compound * 1.5 + 1 + simple
+        // group (max): compound * 3 + 2 + simple * 2 ?
+
         std::vector<StateRange> srs;
         StateRange * sr_beg = nullptr;
         StateRange * sr_first = nullptr;
 
-        srs.push_back({{-1u}, {}, false});
+        srs.push_back({-1u, {}, false});
         {
             StateRange & sr = srs.back();
             if (add_beginning(sr.v, root)) {
@@ -333,7 +348,7 @@ public:
             }
             if (!sr.v.empty()) {
                 has_bol = true;
-                srs.push_back({{}, {}, false});
+                srs.push_back({-2u, {}, false});
                 sr_beg = &sr;
             }
         }
@@ -358,7 +373,7 @@ public:
         //insert
         for (State * st: sts) {
             if (st->is_range() || st->type == LAST || st->type == FIRST) {
-                srs.push_back({{st->num}, {}, false});
+                srs.push_back({st->num, {}, false});
                 StateRange & sr = srs.back();
                 if (add_next_sts(sr.v, st->out1)) {
                     sr.is_finish = true;
@@ -371,13 +386,13 @@ public:
                 StateRange const & csr = srs[i];
                 auto it = std::find_if(srs.begin(), srs.begin()+i, SameRange{csr});
                 if (it != srs.begin()+i) {
-                    const unsigned new_id = it->stg[0];
-                    const unsigned old_id = csr.stg[0];
+                    const unsigned new_id = it->id_nums;
+                    const unsigned old_id = csr.id_nums;
                     RE_SHOW(std::cout << "old_id: " << old_id << "\tnew_id: " << new_id << std::endl);
                     for (StateRange & sr: srs) {
                         for (NState & nst: sr.v) {
-                            if (nst.nums[0] == old_id) {
-                                nst.nums[0] = new_id;
+                            if (nst.id_nums == old_id) {
+                                nst.id_nums = new_id;
                             }
                         }
                     }
@@ -386,13 +401,46 @@ public:
             }
         }
 
+        std::vector<std::vector<unsigned> > nums;
+
+        //re-index
+        {
+          std::vector<uint> indexes(srs.size());
+          auto first = srs.begin();
+          std::generate(indexes.begin(), indexes.end(), [&]{
+            uint ret = first->id_nums;
+            ++first;
+            return ret;
+          });
+
+          auto newindex = [indexes](uint old){
+            return std::find(indexes.begin(), indexes.end(), old) - indexes.begin();
+          };
+
+          for (StateRange & sr: srs) {
+            sr.id_nums = newindex(sr.id_nums);
+            for (NState & nst: sr.v) {
+              nst.id_nums = newindex(nst.id_nums);
+            }
+          }
+
+          nums.resize(indexes.size());
+          for (uint i = 0; i < indexes.size(); ++i) {
+            nums[i].push_back(i);
+          }
+        }
+
+        RE_SHOW(std::cout << "reindex:\n");
+
         struct Display {
+            std::vector<std::vector<unsigned> > const & ref_nums;
+
             void operator()(std::vector<StateRange> & srs) const {
                 if (g_trace_active) {
                     for (StateRange & sr : srs) {
                         std::cout << ("ranges: ");
-                        for (unsigned num: sr.stg) {
-                            std::cout << num << ", ";
+                        for (unsigned id: ref_nums[sr.id_nums]) {
+                            std::cout << id << ", ";
                         }
 
                         if (sr.v.empty()) {
@@ -417,7 +465,7 @@ public:
                                 std::cout << "(finish)\033[0m\t";
                             }
 
-                            for (uint id: st.nums) {
+                            for (unsigned id: ref_nums[st.id_nums]) {
                                 std::cout << id << ", ";
                             }
                             std::cout << "\n";
@@ -426,11 +474,12 @@ public:
                     std::cout << ("--------\n");
                 }
             }
-        } display;
+        } display{nums};
 
         display(srs);
 
-        const size_t simple_srs_limit = srs.size();
+        std::vector<unsigned> num;
+
         for (size_t ir = 0; ir != srs.size(); ++ir) {
             if (srs[ir].v.size() < 2) {
                 continue;
@@ -448,18 +497,33 @@ public:
                 }
                 srs[ir].v.pop_back();
             };
-            auto addnext = [&srs, ir](size_t i, size_t i2) {
-                std::vector<unsigned> & v1 = srs[ir].v[i].nums;
-                std::vector<unsigned> & v2 = srs[ir].v[i2].nums;
+            auto addnext = [&srs, ir, &nums, &num](size_t i, size_t i2) {
+                std::vector<unsigned> & v1 = nums[srs[ir].v[i].id_nums];
+                std::vector<unsigned> & v2 = nums[srs[ir].v[i2].id_nums];
 
-                std::vector<unsigned> nums(v1.size() + v2.size());
-                nums.erase(unique_merge(v1.begin(), v1.end(), v2.begin(), v2.end(), nums.begin()),
-                           nums.end());
-                std::swap(nums, v1);
+                num.resize(v1.size() + v2.size());
+                num.erase(unique_merge(v1.begin(), v1.end(), v2.begin(), v2.end(), num.begin()), num.end());
+
+                auto it = std::find(nums.begin(), nums.end(), num);
+                if (it == nums.end()) {
+                    srs[ir].v[i].id_nums = nums.size();
+                    srs.push_back({uint(nums.size()), {}, false});
+                    auto & v = srs.back().v;
+                    bool & is_finish = srs.back().is_finish;
+                    for (unsigned id: num) {
+                        StateRange & sr = srs[id];
+                        is_finish |= sr.is_finish || sr.v.empty();
+                        v.insert(v.end(), sr.v.begin(), sr.v.end());
+                    }
+                    nums.push_back(std::move(num));
+                }
+                else {
+                  srs[ir].v[i].id_nums = it - nums.begin();
+                }
             };
             for (size_t i1 = 0; i1 < srs[ir].v.size(); ++i1) {
+                ilast = srs[ir].v.size();
                 if (!srs[ir].v[i1].is_range()) {
-                    ilast = srs[ir].v.size();
                     for (size_t i2 = i1+1; i2 < ilast; ++i2) {
                         if (l(i1) == l(i2) && r(i1) == r(i2)) {
                             //std::cout << "=\n";
@@ -470,7 +534,6 @@ public:
                     }
                     continue ;
                 }
-                ilast = srs[ir].v.size();
                 for (size_t i2 = i1+1; i2 < ilast; ++i2) {
                     if (!srs[ir].v[i2].is_range()
                     || (r(i1) < l(i2) && l(i1) < l(i2))
@@ -528,7 +591,7 @@ public:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, l(i2)+1, r(i2)});
+                            srs[ir].v.push_back({srs[ir].v[i2].id_nums, nullptr, l(i2)+1, r(i2)});
                             --r(i1);
                             ++l(i2);
                             addnext(i2, i1);
@@ -549,7 +612,7 @@ public:
                         }
                         // [a-b][b-a]
                         else {
-                            srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, l(i1)+1, r(i1)});
+                            srs[ir].v.push_back({srs[ir].v[i1].id_nums, nullptr, l(i1)+1, r(i1)});
                             --r(i2);
                             ++l(i1);
                             addnext(i1, i2);
@@ -559,7 +622,7 @@ public:
                     //   [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) < r(i2) && l(i2) > r(i1)) {
                         //std::cout << "[1 [2 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].id_nums, nullptr, r(i1)+1, r(i2)});
                         r(i1) = l(i2) - 1;
                         r(i2) = r(i1);
                         addnext(i2, i1);
@@ -568,7 +631,7 @@ public:
                     //   [l1 r1]
                     else if (l(i2) < l(i1) && r(i2) < r(i1) && l(i1) > r(i2)) {
                         //std::cout << "[2 [1 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].id_nums, nullptr, r(i2)+1, r(i1)});
                         r(i2) = l(i1) - 1;
                         r(i1) = r(i2);
                         addnext(i1, i2);
@@ -577,7 +640,7 @@ public:
                     //  [l2 r2]
                     else if (l(i1) < l(i2) && r(i1) > r(i2)) {
                         //std::cout << "[1 [2 2] 1]\n";
-                        srs[ir].v.push_back({srs[ir].v[i1].nums, nullptr, r(i2)+1, r(i1)});
+                        srs[ir].v.push_back({srs[ir].v[i1].id_nums, nullptr, r(i2)+1, r(i1)});
                         r(i1) = l(i2) - 1;
                         addnext(i2, i1);
                     }
@@ -585,28 +648,9 @@ public:
                     //  [l1 r1]
                     else if (l(i1) > l(i2) && r(i1) < r(i2)) {
                         //std::cout << "[2 [1 1] 2]\n";
-                        srs[ir].v.push_back({srs[ir].v[i2].nums, nullptr, r(i1)+1, r(i2)});
+                        srs[ir].v.push_back({srs[ir].v[i2].id_nums, nullptr, r(i1)+1, r(i2)});
                         r(i2) = l(i1) - 1;
                         addnext(i1, i2);
-                    }
-                }
-            }
-
-            for (size_t i = 0; i < srs[ir].v.size(); ++i) {
-                NState & nsts = srs[ir].v[i];
-                if (std::none_of(srs.begin(), srs.end(), [nsts](const StateRange & sr) {
-                    return sr.stg == nsts.nums;
-                })) {
-                    srs.push_back({nsts.nums, {}, false});
-                    auto & v = srs.back().v;
-                    bool & is_finish = srs.back().is_finish;
-                    for (unsigned id: nsts.nums) {
-                        auto it = std::find_if(srs.begin(), srs.begin() + simple_srs_limit
-                        , [id](const StateRange & sr) {
-                            return sr.stg[0] == id;
-                        });
-                        is_finish |= it->is_finish || it->v.empty();
-                        v.insert(v.end(), it->v.begin(), it->v.end());
                     }
                 }
             }
@@ -622,7 +666,7 @@ public:
                 srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) -> bool {
                     for (const StateRange & sr2: srs) {
                         for (const NState & nst : sr2.v) {
-                            if (sr.stg == nst.nums) {
+                            if (sr.id_nums == nst.id_nums) {
                                 return false;
                             }
                         }
@@ -638,7 +682,7 @@ public:
         for (StateRange & sr: srs) {
             for (NState & nst: sr.v) {
                 nst.sr = &*std::find_if(srs.begin(), srs.end(), [nst](const StateRange & sr) {
-                    return sr.stg == nst.nums;
+                    return sr.id_nums == nst.id_nums;
                 });
             }
         }

@@ -21,8 +21,8 @@
 #ifndef REDEMPTION_FTESTS_REGEX_REGEX_HPP
 #define REDEMPTION_FTESTS_REGEX_REGEX_HPP
 
-//#include "regex_automate.hpp"
-#include "regex_automate_capturing.hpp"
+#include "regex_automate.hpp"
+// #include "regex_automate_capturing.hpp"
 #include "regex_parser.hpp"
 
 namespace re {
