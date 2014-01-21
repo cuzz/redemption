@@ -105,17 +105,6 @@ class StateMachine2
                 && other.r == this->r;
         }
 
-        bool operator<(NState const other) const
-        {
-          if (this->l != other.l) {
-            return this->l < other.l;
-          }
-          if (this->r != other.r) {
-            return this->r < other.r;
-          }
-          return this->id_nums < other.id_nums;
-        }
-
         bool is_range() const
         { return !(l > r); }
 
@@ -131,16 +120,6 @@ class StateMachine2
         unsigned id_nums;
         std::vector<NState> v;
         bool is_finish;
-    };
-
-    struct SameRange
-    {
-        StateRange const & csr;
-
-        bool operator()(StateRange& sr) const
-        {
-            return sr.is_finish == csr.is_finish && sr.v == csr.v;
-        }
     };
 
 public:
@@ -384,7 +363,10 @@ public:
         if (!srs.empty()) {
             for (std::size_t i = srs.size(); i-- > 1;) {
                 StateRange const & csr = srs[i];
-                auto it = std::find_if(srs.begin(), srs.begin()+i, SameRange{csr});
+
+                auto it = std::find_if(srs.begin(), srs.begin()+i, [csr](StateRange const& sr)noexcept{
+                  return sr.is_finish == csr.is_finish && sr.v == csr.v;
+                });
                 if (it != srs.begin()+i) {
                     const unsigned new_id = it->id_nums;
                     const unsigned old_id = csr.id_nums;
@@ -413,7 +395,7 @@ public:
             return ret;
           });
 
-          auto newindex = [indexes](uint old){
+          auto newindex = [indexes](uint old) noexcept{
             return std::find(indexes.begin(), indexes.end(), old) - indexes.begin();
           };
 
@@ -485,9 +467,9 @@ public:
                 continue;
             }
             size_t ilast;
-            auto r = [&srs, ir](size_t i) -> char_int & { return srs[ir].v[i].r; };
-            auto l = [&srs, ir](size_t i) -> char_int & { return srs[ir].v[i].l; };
-            auto rmlast = [&srs, ir, &ilast](size_t i) {
+            auto r = [&srs, ir](size_t i) noexcept -> char_int & { return srs[ir].v[i].r; };
+            auto l = [&srs, ir](size_t i) noexcept -> char_int & { return srs[ir].v[i].l; };
+            auto rmlast = [&srs, ir, &ilast](size_t i) noexcept {
                 const size_t vli = srs[ir].v.size() - 1;
                 if (i < vli) {
                     srs[ir].v[i] = std::move(srs[ir].v.back());
@@ -660,10 +642,11 @@ public:
 
         // erase unused StateRange
         /*if (minimal_memory)*/ {
-            size_t sz = srs.size();
+            size_t sz;
             do {
                 sz = srs.size();
-                srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) -> bool {
+              srs.erase(std::remove_if(srs.begin()+1, srs.end(), [srs](const StateRange & sr) noexcept
+              -> bool {
                     for (const StateRange & sr2: srs) {
                         for (const NState & nst : sr2.v) {
                             if (sr.id_nums == nst.id_nums) {
@@ -674,14 +657,165 @@ public:
                     return true;
                 }), srs.end());
 
-                RE_SHOW(std::cout << "##erase\n--------\n");
+                RE_SHOW(std::cout << "## erase\n--------\n");
                 display(srs);
             } while (sz != srs.size());
         }
 
+        // remove the equivalent StateRange
+        /*if (minimal_memory)*/ {
+          struct ConpareRangeNState {
+            bool operator()(NState const & a, NState const & b) const noexcept
+            {
+              if (a.l != b.l) {
+                return a.l < b.l;
+              }
+              if (a.r != b.r) {
+                return a.r < b.r;
+              }
+              return a.id_nums < b.id_nums;
+            }
+          };
+
+          struct CompareStateRange {
+            bool operator()(StateRange const & a, StateRange const & b) const noexcept
+            {
+              if (a.is_finish != b.is_finish) {
+                return a.is_finish;
+              }
+              if (a.v.size() != b.v.size()) {
+                return a.v.size() < b.v.size();
+              }
+              return std::lexicographical_compare(a.v.begin(), a.v.end(), b.v.begin(), b.v.end(),
+                                                  ConpareRangeNState());
+            }
+          };
+
+          for (StateRange & sr: srs) {
+            std::sort(sr.v.begin(), sr.v.end(), ConpareRangeNState());
+          }
+          std::sort(srs.begin(), srs.end(), CompareStateRange());
+
+          auto regroup_contiguous_ranges = [&srs]() noexcept
+          {
+            auto is_contiguous = [](NState const & a, NState const & b) noexcept {
+              return a.id_nums == b.id_nums && a.r + 1 == b.l && a.r < b.l;
+            };
+            bool modify = false;
+            for (StateRange & sr: srs) {
+              if (sr.v.empty()) {
+                continue ;
+              }
+              using iterator = std::vector<NState>::iterator;
+              iterator first = sr.v.begin();
+              iterator last = sr.v.end();
+              while (first + 1 != last && !is_contiguous(*first, *(first+1))) {
+                ++first;
+              }
+              if (first + 1 != last) {
+                iterator cpy = first;
+                cpy->r = (++first)->r;
+                while (++first != last) {
+                  if (is_contiguous(*cpy, *first)) {
+                    cpy->r = first->r;
+                  }
+                  else {
+                    ++cpy;
+                    *cpy = *first;
+                  }
+                }
+                sr.v.erase(++cpy, last);
+                std::sort(sr.v.begin(), sr.v.end(), ConpareRangeNState());
+                modify = true;
+              }
+            }
+
+            if (modify) {
+              std::sort(srs.begin(), srs.end(), CompareStateRange());
+            }
+          };
+
+          regroup_contiguous_ranges();
+
+          struct EqualRangeNState {
+            bool operator()(NState const & a, NState const & b) const noexcept
+            { return a.l == b.l && a.r == b.r && b.id_nums == a.id_nums; }
+          };
+
+          struct EqualStateRange {
+            bool operator()(StateRange const & a, StateRange const & b) const noexcept
+            {
+              return a.is_finish == b.is_finish
+                  && a.v.size() == b.v.size()
+                  && std::equal(a.v.begin(), a.v.end(), b.v.begin(), EqualRangeNState());
+            }
+          };
+
+          using states_type = std::vector<StateRange>;
+          using states_iterator = states_type::iterator;
+
+          auto set_num = [srs](states_iterator first, states_iterator last, unsigned oldid, unsigned newid) noexcept {
+            for (;first != last; ++first) {
+              for (NState & nst: first->v) {
+                if (nst.id_nums == oldid) {
+                  nst.id_nums = newid;
+                }
+              }
+            }
+          };
+
+          RE_SHOW(std::cout << "## sort\n--------\n");
+          display(srs);
+
+          size_t sz;
+          while (1) {
+            RE_SHOW(std::cout << "## remove equivalents\n--------\n");
+            sz = srs.size();
+
+            // erase the identical StateRange
+            {
+              using reverse_iterator = states_type::reverse_iterator;
+              reverse_iterator first = srs.rbegin();
+              reverse_iterator last = srs.rend();
+              while (first + 1 != last) {
+                if (EqualStateRange()(*first, *(first+1))) {
+                  reverse_iterator last2 = first+1;
+                  while (last2 + 1 != last && EqualStateRange()(*last2, *(last2+1))) {
+                    ++last2;
+                  }
+                  const unsigned new_id = last2->id_nums;
+                  for (reverse_iterator first2 = first; first2 != last2; ++first2) {
+                    std::cout << ("old: ") << first2->id_nums << ", new: " <<  new_id << std::endl;
+                    set_num(srs.begin(), first.base(), first2->id_nums, new_id);
+                    set_num(last.base(), srs.end(), first2->id_nums, new_id);
+                  }
+                  srs.erase(last2.base(), first.base());
+                  first = last2;
+                }
+                else {
+                  ++first;
+                }
+              }
+            }
+
+            if (sz == srs.size()) {
+              break;
+            }
+            display(srs);
+
+            regroup_contiguous_ranges();
+
+            display(srs);
+          };
+
+          std::swap(srs[0], *std::find_if(srs.begin(), srs.end(), [](StateRange const & sr) noexcept {
+            return sr.id_nums == 0;
+          }));
+        }
+
         for (StateRange & sr: srs) {
             for (NState & nst: sr.v) {
-                nst.sr = &*std::find_if(srs.begin(), srs.end(), [nst](const StateRange & sr) {
+                nst.sr = &*std::find_if(srs.begin(), srs.end(), [nst](const StateRange & sr) noexcept {
                     return sr.id_nums == nst.id_nums;
                 });
             }
